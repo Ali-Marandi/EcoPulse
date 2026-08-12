@@ -7,6 +7,7 @@ network source is unavailable, so a user can explore workspaces safely while off
 from __future__ import annotations
 
 import csv
+from contextlib import contextmanager
 import hashlib
 import json
 import math
@@ -117,8 +118,18 @@ class LocalStore:
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self.db_path)
 
+    @contextmanager
+    def _session(self):
+        """Commit and close SQLite connections explicitly for Windows-safe workspace cleanup."""
+        connection = self._connect()
+        try:
+            yield connection
+            connection.commit()
+        finally:
+            connection.close()
+
     def _initialize(self) -> None:
-        with self._connect() as db:
+        with self._session() as db:
             db.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS alerts (
@@ -146,14 +157,14 @@ class LocalStore:
         self.log("workspace_initialized", "Local workspace database is ready")
 
     def log(self, event_type: str, details: str) -> None:
-        with self._connect() as db:
+        with self._session() as db:
             db.execute(
                 "INSERT INTO events(event_type, details, created_at) VALUES (?, ?, ?)",
                 (event_type, details, datetime.now(timezone.utc).isoformat()),
             )
 
     def save_alert(self, indicator: str, operator: str, threshold: float) -> None:
-        with self._connect() as db:
+        with self._session() as db:
             db.execute(
                 "INSERT INTO alerts(indicator, operator, threshold, created_at) VALUES (?, ?, ?, ?)",
                 (indicator, operator, threshold, datetime.now(timezone.utc).isoformat()),
@@ -161,31 +172,31 @@ class LocalStore:
         self.log("alert_created", f"{indicator} {operator} {threshold}")
 
     def alert_count(self) -> int:
-        with self._connect() as db:
+        with self._session() as db:
             return db.execute("SELECT COUNT(*) FROM alerts WHERE enabled = 1").fetchone()[0]
 
     def active_alerts(self) -> list[tuple[str, str, float]]:
-        with self._connect() as db:
+        with self._session() as db:
             rows = db.execute(
                 "SELECT indicator, operator, threshold FROM alerts WHERE enabled = 1 ORDER BY id DESC"
             ).fetchall()
         return [(str(indicator), str(operator), float(threshold)) for indicator, operator, threshold in rows]
 
     def recent_events(self, limit: int = 12) -> list[tuple[str, str, str]]:
-        with self._connect() as db:
+        with self._session() as db:
             return db.execute(
                 "SELECT event_type, details, created_at FROM events ORDER BY id DESC LIMIT ?", (limit,)
             ).fetchall()
 
     def list_workspaces(self, limit: int = 20) -> list[tuple[str, dict[str, Any], str]]:
-        with self._connect() as db:
+        with self._session() as db:
             rows = db.execute(
                 "SELECT name, payload, created_at FROM workspaces ORDER BY created_at DESC LIMIT ?", (limit,)
             ).fetchall()
         return [(str(name), json.loads(str(payload)), str(created_at)) for name, payload, created_at in rows]
 
     def save_workspace(self, name: str, payload: dict[str, Any]) -> None:
-        with self._connect() as db:
+        with self._session() as db:
             db.execute(
                 "INSERT OR REPLACE INTO workspaces(name, payload, created_at) VALUES (?, ?, ?)",
                 (name, json.dumps(payload), datetime.now(timezone.utc).isoformat()),

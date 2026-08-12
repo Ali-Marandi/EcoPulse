@@ -11,6 +11,10 @@
 - پوشش smoke test برای persistence، Data Health، Scenario Library و integrity Evidence Pack.
 - کنترل کیفیت بصری اختصاصی برای صفحه Workspace و Evidence Pack.
 
+### Fixed
+
+- اتصال‌های SQLite اکنون پس از هر عملیات به‌طور صریح commit و بسته می‌شوند تا cleanup موقت در Windows runner با خطای `WinError 32` مواجه نشود.
+
 ### Changed
 
 - نسخه برنامه به `1.1.0` افزایش یافت.
