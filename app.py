@@ -7,6 +7,7 @@ network source is unavailable, so a user can explore workspaces safely while off
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import math
 import os
@@ -45,7 +46,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "EcoPulse"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.1.0"
 ACCENT = "#54E1B6"
 ACCENT_DARK = "#1BBE91"
 BLUE = "#67A7FF"
@@ -77,6 +78,31 @@ INDICATORS = {
 class SeriesPoint:
     period: str
     value: float
+
+
+def assess_data_health(
+    data: dict[str, list[SeriesPoint]], provenance: dict[str, str]
+) -> dict[str, dict[str, Any]]:
+    """Return transparent, deterministic quality labels for the active local dataset."""
+    assessment: dict[str, dict[str, Any]] = {}
+    for key, (title, _, _, _) in INDICATORS.items():
+        points = data.get(key, [])
+        source = provenance.get(key, "No source status")
+        is_live = "live" in source.lower()
+        score = 100 if is_live else 62
+        if len(points) < 5:
+            score -= 25
+        if not points:
+            score = 0
+        assessment[key] = {
+            "indicator": title,
+            "state": "LIVE" if is_live else ("FALLBACK" if points else "UNAVAILABLE"),
+            "score": max(0, score),
+            "observations": len(points),
+            "latest_period": points[-1].period if points else "—",
+            "provenance": source,
+        }
+    return assessment
 
 
 class LocalStore:
@@ -150,6 +176,13 @@ class LocalStore:
             return db.execute(
                 "SELECT event_type, details, created_at FROM events ORDER BY id DESC LIMIT ?", (limit,)
             ).fetchall()
+
+    def list_workspaces(self, limit: int = 20) -> list[tuple[str, dict[str, Any], str]]:
+        with self._connect() as db:
+            rows = db.execute(
+                "SELECT name, payload, created_at FROM workspaces ORDER BY created_at DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return [(str(name), json.loads(str(payload)), str(created_at)) for name, payload, created_at in rows]
 
     def save_workspace(self, name: str, payload: dict[str, Any]) -> None:
         with self._connect() as db:
@@ -325,6 +358,7 @@ class MainWindow(QMainWindow):
         self.service = EconomicDataService()
         self.current_data: dict[str, list[SeriesPoint]] = {}
         self.current_provenance: dict[str, str] = {}
+        self.data_health: dict[str, dict[str, Any]] = {}
         self.alert_hits: list[str] = []
         self.worker_thread: QThread | None = None
         self._build_window()
@@ -533,9 +567,13 @@ class MainWindow(QMainWindow):
         self.provenance_label = QLabel("No data retrieved yet.")
         self.provenance_label.setWordWrap(True)
         self.provenance_label.setObjectName("provenance")
+        self.data_health_label = QLabel("Data health: waiting for source refresh")
+        self.data_health_label.setWordWrap(True)
+        self.data_health_label.setObjectName("provenance")
         self.last_refresh_label = QLabel("Last refresh: —")
         self.last_refresh_label.setObjectName("metricDelta")
         source_layout.addWidget(self.provenance_label)
+        source_layout.addWidget(self.data_health_label)
         source_layout.addWidget(self.last_refresh_label)
         source_layout.addStretch()
         export_btn = QPushButton("Export active series as CSV")
@@ -653,12 +691,16 @@ class MainWindow(QMainWindow):
         layout.addWidget(SectionTitle("Governed collaboration", "Workspace", "Save decision context locally, retain traceable events and prepare controlled exports."))
         grid = QGridLayout()
         grid.setHorizontalSpacing(16)
-        boards, boards_layout = frame("Saved boards", "A local workspace record gives every decision a reproducible starting point.")
-        boards_layout.addWidget(make_table(["Board", "Owner", "Status", "Last update"], [
-            ["Executive macro monitor", "Local user", "Active", "On refresh"],
-            ["Inflation response plan", "Local user", "Draft", "Scenario driven"],
-            ["Country comparison", "Local user", "Active", "On refresh"],
-        ]))
+        boards, boards_layout = frame("Scenario library", "Saved local scenarios are traceable artifacts ready for controlled evidence export.")
+        self.workspace_table = make_table(["Scenario", "Country", "Stress", "Saved at"], [])
+        boards_layout.addWidget(self.workspace_table)
+        export_evidence = QPushButton("Export decision evidence pack")
+        export_evidence.setObjectName("primaryButton")
+        export_evidence.clicked.connect(self._export_evidence_pack)
+        boards_layout.addWidget(export_evidence)
+        self.evidence_status_label = QLabel("Evidence pack: ready after a source refresh")
+        self.evidence_status_label.setObjectName("metricDelta")
+        boards_layout.addWidget(self.evidence_status_label)
         grid.addWidget(boards, 0, 0)
         audit, audit_layout = frame("Local audit trail", "Events generated by this workspace only. Data is not sent to a remote service by EcoPulse.")
         self.audit_table = make_table(["Event", "Details", "Timestamp"], [])
@@ -666,6 +708,7 @@ class MainWindow(QMainWindow):
         grid.addWidget(audit, 0, 1)
         layout.addLayout(grid)
         self._refresh_audit()
+        self._refresh_workspace()
         layout.addStretch()
         return scroll
 
@@ -698,7 +741,7 @@ class MainWindow(QMainWindow):
 
     def _build_settings(self) -> QWidget:
         scroll, _, layout = self._build_scroll_page()
-        layout.addWidget(SectionTitle("Configuration", "Settings", "Control local behavior before connecting any organization-managed service."))
+        layout.addWidget(SectionTitle("Configuration", "Settings", "Review the local security boundary before connecting any organization-managed service."))
         panel, panel_layout = frame("Desktop defaults", "These settings are local to this Windows workstation.")
         panel_layout.addWidget(QLabel("Active country is changed from the global selector. User-managed credentials are intentionally not persisted in this starter edition. Production use should integrate the organization’s approved secret manager and identity provider."))
         clear = QPushButton("Open local workspace folder")
@@ -707,6 +750,20 @@ class MainWindow(QMainWindow):
         panel_layout.addSpacing(8)
         panel_layout.addWidget(clear)
         layout.addWidget(panel)
+
+        readiness, readiness_layout = frame("Guardrails readiness manifest", "A local, exportable record of the active desktop boundary. This is not a claim of SOC 2 or GDPR certification.")
+        readiness_layout.addWidget(make_table(["Control", "Desktop status", "Enterprise path"], [
+            ["Remote AI execution", "Disabled by default", "Policy-bound AI orchestrator"],
+            ["Evidence exports", "Local JSON + SHA-256", "Central immutable evidence ledger"],
+            ["Data source health", "Visible on refresh", "SLA, vintage and entitlement broker"],
+            ["Identity boundary", "Local workstation", "OIDC/SAML + RBAC/ABAC"],
+            ["Sensitive actions", "No external action enabled", "Human approval + scoped tool broker"],
+        ]))
+        export_manifest = QPushButton("Export local guardrails manifest")
+        export_manifest.setObjectName("secondaryButton")
+        export_manifest.clicked.connect(self._export_policy_manifest)
+        readiness_layout.addWidget(export_manifest)
+        layout.addWidget(readiness)
         layout.addStretch()
         return scroll
 
@@ -718,6 +775,7 @@ class MainWindow(QMainWindow):
         self.context_label.setText(contexts[index])
         if index == 3:
             self._refresh_audit()
+            self._refresh_workspace()
 
     def _load_country(self) -> None:
         if self.worker_thread and self.worker_thread.isRunning():
@@ -741,6 +799,7 @@ class MainWindow(QMainWindow):
     def _apply_data(self, data: dict[str, list[SeriesPoint]], provenance: dict[str, str]) -> None:
         self.current_data = data
         self.current_provenance = provenance
+        self.data_health = assess_data_health(data, provenance)
         for key, card in self.metric_cards.items():
             series = data[key]
             unit = INDICATORS[key][2]
@@ -751,6 +810,11 @@ class MainWindow(QMainWindow):
         self._evaluate_alerts()
         details = "\n".join(f"{INDICATORS[key][0]}: {source}" for key, source in provenance.items())
         self.provenance_label.setText(details)
+        health_summary = " · ".join(
+            f"{entry['indicator']}: {entry['state']} {entry['score']}/100"
+            for entry in self.data_health.values()
+        )
+        self.data_health_label.setText(f"Data health · {health_summary}")
         refreshed = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z")
         self.last_refresh_label.setText(f"Last refresh: {refreshed}")
         self.status_badge.setText("  SOURCES READY  ")
@@ -759,6 +823,7 @@ class MainWindow(QMainWindow):
         self.status_badge.style().polish(self.status_badge)
         self.store.log("source_refresh", f"{self.country_combo.currentText()} · {'; '.join(provenance.values())}")
         self._refresh_audit()
+        self._refresh_workspace()
         self._update_scenario()
 
     def _show_error(self, message: str) -> None:
@@ -803,8 +868,11 @@ class MainWindow(QMainWindow):
             rows.append([name, f"{gdp + modifier:.2f}%", f"{max(0.2, inflation - modifier * .65):.2f}%", f"{max(1.0, unemployment + modifier * .3):.2f}%"])
         table = make_table(["Economy", "Growth", "Inflation", "Labor signal"], rows)
         parent_layout = self.benchmark_table.parentWidget().layout()
-        parent_layout.replaceWidget(self.benchmark_table, table)
-        self.benchmark_table.deleteLater()
+        previous = self.benchmark_table
+        parent_layout.replaceWidget(previous, table)
+        previous.hide()
+        previous.setParent(None)
+        previous.deleteLater()
         self.benchmark_table = table
 
     def _refresh_assessment(self) -> None:
@@ -888,8 +956,11 @@ class MainWindow(QMainWindow):
         ]
         new_table = make_table(["Dimension", "Baseline", "Scenario", "Direction"], rows)
         parent_layout = self.scenario_table.parentWidget().layout()
-        parent_layout.replaceWidget(self.scenario_table, new_table)
-        self.scenario_table.deleteLater()
+        previous = self.scenario_table
+        parent_layout.replaceWidget(previous, new_table)
+        previous.hide()
+        previous.setParent(None)
+        previous.deleteLater()
         self.scenario_table = new_table
 
     def _save_scenario(self) -> None:
@@ -902,7 +973,118 @@ class MainWindow(QMainWindow):
         }
         name = f"Scenario · {datetime.now().strftime('%Y-%m-%d %H:%M')}"
         self.store.save_workspace(name, payload)
-        QMessageBox.information(self, "Scenario saved", "The scenario assumptions were saved to this device's local workspace.")
+        self._refresh_workspace()
+        QMessageBox.information(self, "Scenario saved", "The scenario assumptions were saved to this device's local scenario library.")
+
+    def _refresh_workspace(self) -> None:
+        if not hasattr(self, "workspace_table"):
+            return
+        rows: list[list[str]] = []
+        for name, payload, created_at in self.store.list_workspaces():
+            country = str(payload.get("country", "—"))
+            stress = (
+                f"G {float(payload.get('growth_shock', 0)):+.2f} · "
+                f"I {float(payload.get('inflation_shock', 0)):+.2f} · "
+                f"L {float(payload.get('labor_shock', 0)):+.2f}"
+            )
+            rows.append([name, country, stress, created_at.replace("T", " ")[:19]])
+        if not rows:
+            rows = [["No saved scenarios", "—", "Save an assumption set", "—"]]
+        table = make_table(["Scenario", "Country", "Stress", "Saved at"], rows)
+        parent_layout = self.workspace_table.parentWidget().layout()
+        previous = self.workspace_table
+        parent_layout.replaceWidget(previous, table)
+        previous.hide()
+        previous.setParent(None)
+        previous.deleteLater()
+        self.workspace_table = table
+
+    def build_evidence_bundle(self) -> dict[str, Any]:
+        """Build a local, deterministic decision record without making enterprise compliance claims."""
+        generated_at = datetime.now(timezone.utc).isoformat()
+        scenario = {
+            "country": self.country_combo.currentText(),
+            "growth_shock": self.growth_slider.value() / 100 if hasattr(self, "growth_slider") else None,
+            "inflation_shock": self.inflation_slider.value() / 100 if hasattr(self, "inflation_slider") else None,
+            "labor_shock": self.labor_slider.value() / 100 if hasattr(self, "labor_slider") else None,
+            "status": self.scenario_status.text() if hasattr(self, "scenario_status") else "Not calculated",
+        }
+        bundle: dict[str, Any] = {
+            "schema": "ecopulse.evidence-pack.v1",
+            "generated_at": generated_at,
+            "application": {"name": APP_NAME, "version": APP_VERSION, "mode": "local-first"},
+            "scope": {"country": self.country_combo.currentText(), "remote_ai_execution": False},
+            "data_health": self.data_health,
+            "provenance": self.current_provenance,
+            "latest_observations": {
+                key: {"period": points[-1].period, "value": points[-1].value}
+                for key, points in self.current_data.items() if points
+            },
+            "scenario": scenario,
+            "active_alerts": [
+                {"indicator": indicator, "operator": operator, "threshold": threshold}
+                for indicator, operator, threshold in self.store.active_alerts()
+            ],
+            "triggered_alerts": self.alert_hits,
+            "recent_audit_events": [
+                {"event_type": event, "details": details, "created_at": timestamp}
+                for event, details, timestamp in self.store.recent_events(50)
+            ],
+            "limitations": [
+                "Local desktop evidence only; no remote approval workflow is enabled.",
+                "Offline fallback data is explicitly marked and must not be represented as a live source.",
+                "This artifact supports traceability but is not a SOC 2 report or a GDPR compliance certificate.",
+            ],
+        }
+        canonical = json.dumps(bundle, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        bundle["integrity"] = {"algorithm": "SHA-256", "canonical_payload_sha256": hashlib.sha256(canonical.encode("utf-8")).hexdigest()}
+        return bundle
+
+    def _export_evidence_pack(self) -> None:
+        if not self.current_data:
+            QMessageBox.information(self, "No evidence available", "Refresh data before exporting an evidence pack.")
+            return
+        default_name = f"ecopulse_evidence_{self.country_combo.currentText().lower().replace(' ', '_')}.json"
+        path, _ = QFileDialog.getSaveFileName(self, "Export EcoPulse decision evidence", default_name, "JSON files (*.json)")
+        if not path:
+            return
+        bundle = self.build_evidence_bundle()
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(bundle, handle, ensure_ascii=False, indent=2)
+        self.store.log("evidence_pack_exported", f"{bundle['integrity']['canonical_payload_sha256'][:12]} · {path}")
+        self.evidence_status_label.setText(f"Evidence pack exported · SHA-256 {bundle['integrity']['canonical_payload_sha256'][:12]}…")
+        self._refresh_audit()
+        QMessageBox.information(self, "Evidence pack exported", "The local decision record includes lineage, data health, scenario state and an integrity checksum.")
+
+    def _export_policy_manifest(self) -> None:
+        manifest = {
+            "schema": "ecopulse.guardrails-manifest.v1",
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "application": {"name": APP_NAME, "version": APP_VERSION},
+            "desktop_boundary": {
+                "remote_ai_execution": False,
+                "remote_identity": False,
+                "licensed_data_broker": False,
+                "evidence_export": "local-json-sha256",
+                "sensitive_external_actions": "disabled",
+            },
+            "enterprise_next_steps": [
+                "Policy-bound AI orchestrator with citation-only responses",
+                "OIDC/SAML identity and RBAC/ABAC enforcement",
+                "Scoped tool broker with human approval for high-risk actions",
+                "Central immutable evidence ledger and retention controls",
+            ],
+            "notice": "This manifest documents desktop controls and is not a SOC 2 report or GDPR compliance certificate.",
+        }
+        default_name = "ecopulse_guardrails_manifest.json"
+        path, _ = QFileDialog.getSaveFileName(self, "Export local guardrails manifest", default_name, "JSON files (*.json)")
+        if not path:
+            return
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(manifest, handle, ensure_ascii=False, indent=2)
+        self.store.log("guardrails_manifest_exported", path)
+        self._refresh_audit()
+        QMessageBox.information(self, "Manifest exported", "The local guardrails readiness manifest has been exported.")
 
     def _refresh_audit(self) -> None:
         if not hasattr(self, "audit_table"):
@@ -911,8 +1093,11 @@ class MainWindow(QMainWindow):
         rows = [[event, details, timestamp.replace("T", " ")[:19]] for event, details, timestamp in events]
         table = make_table(["Event", "Details", "Timestamp"], rows)
         parent_layout = self.audit_table.parentWidget().layout()
-        parent_layout.replaceWidget(self.audit_table, table)
-        self.audit_table.deleteLater()
+        previous = self.audit_table
+        parent_layout.replaceWidget(previous, table)
+        previous.hide()
+        previous.setParent(None)
+        previous.deleteLater()
         self.audit_table = table
 
     def _export_series(self) -> None:
