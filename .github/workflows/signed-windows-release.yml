@@ -1,0 +1,228 @@
+name: Signed Windows release
+
+# Deliberately manual/reusable during migration. Do not enable a tag trigger until
+# the production-signing environment, OIDC federation, and approvals are configured.
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing immutable v* tag to build and sign
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      release_tag:
+        description: Existing immutable v* tag to build and sign
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-validate:
+    name: Build unsigned Windows candidate
+    runs-on: windows-2025
+    permissions:
+      contents: read
+    outputs:
+      artifact_name: ${{ steps.meta.outputs.artifact_name }}
+      commit_sha: ${{ steps.meta.outputs.commit_sha }}
+
+    steps:
+      - name: Reject non-version tag input
+        shell: pwsh
+        run: |
+          if ('${{ inputs.release_tag }}' -notmatch '^v\d+\.\d+\.\d+([-.].+)?$') {
+            throw 'release_tag must be an immutable semantic v* tag.'
+          }
+
+      - name: Checkout immutable tag
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.release_tag }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Run offline smoke tests
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          if (Test-Path .\tests\smoke.py) {
+            python .\tests\smoke.py
+          } elseif (Test-Path .\smoke.py) {
+            python .\smoke.py
+          } else {
+            throw 'No supported EcoPulse smoke test entry point was found.'
+          }
+
+      - name: Build EcoPulse.exe
+        shell: cmd
+        run: build_windows.bat
+
+      - name: Prepare provenance evidence
+        id: meta
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path release\evidence -Force | Out-Null
+          Copy-Item dist\EcoPulse.exe release\EcoPulse.exe
+          $commitSha = (git rev-parse HEAD).Trim()
+          $provenance = [ordered]@{
+            schema_version = '1.0'
+            release_tag = '${{ inputs.release_tag }}'
+            commit_sha = $commitSha
+            repository = '${{ github.repository }}'
+            workflow = '${{ github.workflow }}'
+            run_id = '${{ github.run_id }}'
+            generated_at_utc = (Get-Date).ToUniversalTime().ToString('o')
+            artifact = 'EcoPulse.exe'
+            signing_state = 'unsigned-candidate'
+          }
+          $provenance | ConvertTo-Json | Set-Content release\evidence\provenance.json -Encoding utf8NoBOM
+          python -m pip freeze | Set-Content release\evidence\python-dependencies.txt -Encoding utf8NoBOM
+          "artifact_name=EcoPulse-unsigned-${{ inputs.release_tag }}" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "commit_sha=$commitSha" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Upload unsigned candidate for signing job
+        uses: actions/upload-artifact@v4
+        with:
+          name: EcoPulse-unsigned-${{ inputs.release_tag }}
+          path: release
+          if-no-files-found: error
+          retention-days: 1
+
+  sign-verify-and-publish:
+    name: Sign, verify and publish
+    needs: build-and-validate
+    runs-on: windows-2025
+    # Configure required reviewers, prevent self-review, and restrict allowed tags
+    # on this repository environment before enabling this workflow.
+    environment: production-signing
+    permissions:
+      contents: write
+      id-token: write
+
+    steps:
+      - name: Validate production signing configuration
+        shell: pwsh
+        env:
+          SIGNING_ENDPOINT: ${{ vars.SIGNING_ENDPOINT }}
+          SIGNING_ACCOUNT_NAME: ${{ vars.SIGNING_ACCOUNT_NAME }}
+          SIGNING_CERTIFICATE_PROFILE: ${{ vars.SIGNING_CERTIFICATE_PROFILE }}
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          $required = 'SIGNING_ENDPOINT','SIGNING_ACCOUNT_NAME','SIGNING_CERTIFICATE_PROFILE','AZURE_CLIENT_ID','AZURE_TENANT_ID','AZURE_SUBSCRIPTION_ID'
+          foreach ($name in $required) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+              throw "Missing protected environment variable: $name"
+            }
+          }
+
+      - name: Checkout release controls at signed tag
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.release_tag }}
+          fetch-depth: 0
+
+      - name: Verify checked-out tag matches build provenance
+        shell: pwsh
+        run: |
+          $checkedOutSha = (git rev-parse HEAD).Trim()
+          if ($checkedOutSha -ne '${{ needs.build-and-validate.outputs.commit_sha }}') {
+            throw "Tag ref mismatch: build used ${{ needs.build-and-validate.outputs.commit_sha }}, signing job checked out $checkedOutSha."
+          }
+
+      - name: Download unsigned candidate
+        uses: actions/download-artifact@v4
+        with:
+          name: EcoPulse-unsigned-${{ inputs.release_tag }}
+          path: release
+
+      - name: Scan unsigned candidate with Microsoft Defender
+        shell: pwsh
+        run: .\scripts\scan-release-artifact.ps1 -Path .\release\EcoPulse.exe -ReportDirectory .\release\evidence\pre-sign-defender
+
+      # OIDC creates a job-scoped credential. The Azure IDs are identifiers, not private keys.
+      # Configure a federated credential restricted to this repository + production-signing environment.
+      - name: Authenticate to signing provider via OIDC
+        uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign EcoPulse.exe with timestamp
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ vars.SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ vars.SIGNING_CERTIFICATE_PROFILE }}
+          files: ${{ github.workspace }}\release\EcoPulse.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          description: EcoPulse Desktop ${{ inputs.release_tag }}
+          description-url: https://github.com/${{ github.repository }}/releases/tag/${{ inputs.release_tag }}
+          correlation-id: ${{ github.run_id }}-${{ github.run_attempt }}
+          exclude-environment-credential: true
+          exclude-workload-identity-credential: true
+          exclude-managed-identity-credential: true
+          exclude-shared-token-cache-credential: true
+          exclude-visual-studio-credential: true
+          exclude-visual-studio-code-credential: true
+          exclude-azure-cli-credential: false
+          exclude-azure-powershell-credential: true
+          exclude-azure-developer-cli-credential: true
+          exclude-interactive-browser-credential: true
+
+      - name: Verify Authenticode and create release manifest
+        shell: pwsh
+        run: |
+          .\scripts\verify-signed-artifact.ps1 `
+            -Path .\release\EcoPulse.exe `
+            -OutputDirectory .\release\evidence `
+            -ExpectedSubject '${{ vars.SIGNING_SUBJECT_CONTAINS }}'
+
+      - name: Scan signed release artifact with Microsoft Defender
+        shell: pwsh
+        run: .\scripts\scan-release-artifact.ps1 -Path .\release\EcoPulse.exe -ReportDirectory .\release\evidence\post-sign-defender
+
+      - name: Publish signed artifact and evidence
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = '${{ inputs.release_tag }}'
+          gh release view $tag 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag --title "EcoPulse $tag" --notes "Signed Windows release."
+          }
+          gh release upload $tag `
+            .\release\EcoPulse.exe `
+            .\release\evidence\EcoPulse.exe.release-manifest.json `
+            .\release\evidence\EcoPulse.exe.sha256 `
+            .\release\evidence\provenance.json `
+            .\release\evidence\python-dependencies.txt `
+            --clobber
+
+      - name: Upload signing evidence retention copy
+        uses: actions/upload-artifact@v4
+        with:
+          name: EcoPulse-signed-evidence-${{ inputs.release_tag }}
+          path: release/evidence
+          if-no-files-found: error
+          retention-days: 365

@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.ecopulse.example/telemetry/update-event-1.0.json",
+  "title": "EcoPulse auto-update rollout event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "event_id",
+    "occurred_at_utc",
+    "event_name",
+    "installation_pseudonym",
+    "tenant_pseudonym",
+    "release_channel",
+    "from_version",
+    "to_version",
+    "result"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "event_id": { "type": "string", "format": "uuid" },
+    "occurred_at_utc": { "type": "string", "format": "date-time" },
+    "event_name": {
+      "type": "string",
+      "enum": [
+        "update_check_started",
+        "update_available",
+        "update_download_completed",
+        "update_signature_verified",
+        "update_install_started",
+        "update_install_succeeded",
+        "update_install_failed",
+        "rollback_started",
+        "rollback_succeeded",
+        "first_launch_after_update"
+      ]
+    },
+    "installation_pseudonym": {
+      "type": "string",
+      "description": "Rotating opaque identifier; no hostname, user name, email, IP address, path, or hardware serial."
+    },
+    "tenant_pseudonym": {
+      "type": "string",
+      "description": "Tenant-scoped opaque identifier or 'unmanaged'; never a customer legal name."
+    },
+    "release_channel": { "type": "string", "enum": ["internal", "canary", "stable", "managed", "air_gapped"] },
+    "from_version": { "type": "string", "maxLength": 64 },
+    "to_version": { "type": "string", "maxLength": 64 },
+    "release_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "os_family": { "const": "Windows" },
+    "os_release": { "type": "string", "maxLength": 32 },
+    "architecture": { "type": "string", "enum": ["x64", "arm64"] },
+    "update_source": { "type": "string", "enum": ["app_installer", "intune", "configmgr", "winget", "offline"] },
+    "result": { "type": "string", "enum": ["started", "succeeded", "failed", "blocked", "skipped"] },
+    "error_class": {
+      "type": "string",
+      "enum": [
+        "none", "network_dns", "network_tls", "network_timeout", "manifest_invalid",
+        "signature_invalid", "hash_mismatch", "policy_blocked", "auth_required",
+        "disk_space", "install_busy", "install_denied", "package_conflict",
+        "rollback_required", "unknown"
+      ]
+    },
+    "duration_ms": { "type": "integer", "minimum": 0, "maximum": 86400000 },
+    "correlation_id": { "type": "string", "format": "uuid" }
+  }
+}
