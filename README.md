@@ -15,7 +15,11 @@ EcoPulse Desktop transforms the original Dash prototype into a native **Windows-
 | **Data Health lens** | Each active indicator receives a transparent live/fallback state, observation count and deterministic readiness score. | Prevents a fallback source from being silently treated as verified live data. |
 | **Signal and early-warning workspace** | Users can define locally stored threshold rules and review a transparent regime assessment. | Makes the analytical process repeatable and reviewable. |
 | **Scenario Studio and Library** | Explicit growth, inflation and labour shocks drive transparent, illustrative outcomes; saved scenarios appear as reusable local artifacts. | Supports structured planning conversations and stress-test preparation. |
-| **Evidence and auditability** | CSV export carries provenance; a JSON Decision Evidence Pack includes data health, lineage, scenario state, alerts, audit events and a SHA-256 integrity checksum. | Creates a lightweight, exportable decision record without an external backend. |
+| **Decision-readiness gate** | A transparent local score combines Data Health, fallback/unavailable states and active alert conditions into `Ready for review`, `Review required` or `Blocked`. | Prevents an evidence export from being mistaken for an unconditional go decision. |
+| **Tamper-evident local audit** | New workspace events form a locally verified SHA-256 hash chain; the evidence pack reports chain status and latest chain hash. | Raises confidence in local decision records without falsely claiming a central immutable ledger. |
+| **Evidence Pack verifier** | Users can select an exported EcoPulse Evidence Pack and independently recompute its canonical SHA-256 checksum; any changed payload is flagged. | Helps reviewers distinguish an intact local decision record from a modified copy before it is used in a meeting or audit. |
+| **Scenario Governance Ledger** | Saved scenarios retain versioned assumptions, risk state, readiness state and a source snapshot digest; a ledger export has record-level and ledger-level SHA-256 verification. | Makes local scenario review more structured and surfaces later changes to exported scenario records. |
+| **Evidence and auditability** | CSV export carries provenance; a JSON Decision Evidence Pack includes data health, lineage, scenario state, alerts, audit events, readiness status, audit-chain verification and a SHA-256 integrity checksum. | Creates a lightweight, exportable decision record without an external backend. |
 | **Local Guardrails Manifest** | Settings can export the enabled local control boundary and the required enterprise next steps. | Improves staging readiness and makes desktop limitations explicit. |
 | **Windows release pipeline** | A GitHub Actions workflow validates the app on Windows and builds `EcoPulse.exe` on a Windows runner. A version tag creates a release. | Makes builds reproducible and avoids unreliable cross-platform binary generation. |
 
@@ -87,11 +91,11 @@ This edition makes a distinction between **product-ready foundations** and **ent
 
 | Included now | Required before regulated or multi-user production |
 | --- | --- |
-| Local SQLite audit events and saved scenario payloads. | Central immutable audit service, retention schedules and legal holds. |
+| Local SQLite audit events, hash-chain verification and saved scenario payloads. | Central immutable audit service, retention schedules, legal holds and independent retention controls. |
 | Credential-free public source integration and clear provenance. | Approved vendor contracts, entitlement checks, request metering and data-licensing governance. |
 | Local desktop workspace without remote transmission. | OIDC/SAML authentication, role-based permissions, SCIM provisioning and tenant isolation. |
 | Transparent heuristic scenario calculations with user-specified shocks. | Validated forecasting models, model registry, reviewer sign-off, performance monitoring and model-risk controls. |
-| CSV evidence export. | Controlled PDF/Excel templates, watermarking, export policy enforcement and DLP integration. |
+| Local evidence export with a readiness gate, hash-chain status, Scenario Governance Ledger and SHA-256 checksum. | Controlled PDF/Excel templates, watermarking, export policy enforcement, DLP integration, central scenario approval and multi-party approvals. |
 
 No personal or provider credentials are included in this source tree. If optional licensed feeds are introduced, retrieve their credentials through the organization’s approved secret manager or secure identity broker; never commit them to Git or embed them in a desktop binary.
 

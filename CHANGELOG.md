@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased — Decision Readiness and Audit Integrity Candidate
+
+### Added
+
+- **Decision Readiness Gate** که Data Health، داده fallback/unavailable و alertهای فعال را به سه وضعیت شفاف `READY FOR REVIEW`، `REVIEW REQUIRED` و `BLOCKED` تبدیل می‌کند. این gate توصیه سرمایه‌گذاری یا جایگزین approval انسانی نیست.
+- **Tamper-evident Local Audit Chain** برای رخدادهای جدید workspace، با زنجیره SHA-256 قابل‌راستی‌آزمایی، تشخیص break و نمایش وضعیت یکپارچگی در Workspace.
+- **Evidence Pack افزوده‌شده** شامل decision readiness، audit integrity، شمار رخدادهای زنجیره‌شده و latest chain hash.
+- **Evidence Pack Verifier** که checksum canonical SHA-256 هر Evidence Pack EcoPulse را در رابط Workspace محاسبه می‌کند و هرگونه تغییر در payload را آشکار می‌سازد.
+- **Scenario Governance Ledger** که scenarioهای ذخیره‌شده را با assumptions، risk state، decision-readiness و digest snapshot داده versioned می‌کند؛ export آن شامل checksum هر record و checksum کل ledger است و قابلیت verification مستقل دارد.
+- **حفاظت release hardening** در workflow پیشنهادی credentialless signing: job امضا اکنون tag را checkout می‌کند و SHA واقعی build را با provenance پیش از امضا تطبیق می‌دهد.
+- پوشش smoke test برای readiness gate، hash-chain audit و evidence integrity افزوده شد.
+
+### Release boundary
+
+این تغییرات فقط در workspace محلی آماده شده‌اند و هنوز به GitHub push، tag یا Release عمومی تبدیل نشده‌اند.
+
 ## 1.1.0 — Commercial Evidence Foundations
 
 ### Added

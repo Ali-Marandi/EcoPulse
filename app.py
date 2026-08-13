@@ -106,6 +106,95 @@ def assess_data_health(
     return assessment
 
 
+def assess_decision_readiness(
+    data_health: dict[str, dict[str, Any]], alert_hits: list[str]
+) -> dict[str, Any]:
+    """Return a conservative, explainable gate for decision evidence exports.
+
+    This is not an investment recommendation or a substitute for approval. It makes
+    missing/fallback data and active alert conditions visible before a user relies on
+    a local decision record.
+    """
+    if not data_health:
+        return {
+            "score": 0,
+            "state": "NOT READY",
+            "summary": "Refresh sources before relying on a decision record.",
+            "blockers": ["No source-health assessment is available."],
+        }
+
+    entries = list(data_health.values())
+    score = round(sum(int(entry["score"]) for entry in entries) / len(entries))
+    unavailable = [entry["indicator"] for entry in entries if entry["state"] == "UNAVAILABLE"]
+    fallback = [entry["indicator"] for entry in entries if entry["state"] == "FALLBACK"]
+    blockers: list[str] = []
+    if unavailable:
+        blockers.append(f"Unavailable data: {', '.join(unavailable)}.")
+    if fallback:
+        blockers.append(f"Fallback data requires reviewer confirmation: {', '.join(fallback)}.")
+    if alert_hits:
+        blockers.append(f"{len(alert_hits)} active alert condition(s) require review.")
+
+    if unavailable or score < 50:
+        state = "BLOCKED"
+        summary = "Evidence can be exported, but the decision gate is blocked by data quality."
+    elif blockers or score < 85:
+        state = "REVIEW REQUIRED"
+        summary = "A designated reviewer should acknowledge the listed conditions before use."
+    else:
+        state = "READY FOR REVIEW"
+        summary = "Data-quality checks passed; human approval remains required."
+    return {"score": score, "state": state, "summary": summary, "blockers": blockers}
+
+
+def verify_integrity_bundle(bundle: dict[str, Any], label: str = "Artifact") -> dict[str, Any]:
+    """Verify a deterministic SHA-256 checksum stored in an export artifact."""
+    integrity = bundle.get("integrity")
+    if not isinstance(integrity, dict):
+        return {"valid": False, "reason": f"{label} has no integrity section."}
+    expected = integrity.get("canonical_payload_sha256")
+    if not isinstance(expected, str) or len(expected) != 64:
+        return {"valid": False, "reason": f"{label} has no valid SHA-256 checksum."}
+    payload = {key: value for key, value in bundle.items() if key != "integrity"}
+    canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    actual = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return {
+        "valid": actual == expected,
+        "expected_sha256": expected,
+        "computed_sha256": actual,
+        "reason": "Integrity checksum matches." if actual == expected else "Integrity checksum does not match the payload.",
+    }
+
+
+def verify_evidence_bundle(bundle: dict[str, Any]) -> dict[str, Any]:
+    """Verify the deterministic SHA-256 checksum of an exported evidence pack."""
+    if bundle.get("schema") != "ecopulse.evidence-pack.v1":
+        return {"valid": False, "reason": "This file is not an EcoPulse v1 decision evidence pack."}
+    return verify_integrity_bundle(bundle, "Evidence pack")
+
+
+def verify_scenario_ledger(ledger: dict[str, Any]) -> dict[str, Any]:
+    """Verify ledger-level integrity and every scenario record's individual digest."""
+    if ledger.get("schema") != "ecopulse.scenario-ledger.v1":
+        return {"valid": False, "reason": "This file is not an EcoPulse scenario governance ledger."}
+    bundle_result = verify_integrity_bundle(ledger, "Scenario ledger")
+    if not bundle_result["valid"]:
+        return bundle_result
+    records = ledger.get("records")
+    if not isinstance(records, list):
+        return {"valid": False, "reason": "Scenario ledger records must be a list."}
+    for index, record in enumerate(records, start=1):
+        if not isinstance(record, dict):
+            return {"valid": False, "reason": f"Scenario ledger record {index} is invalid."}
+        expected = record.get("record_sha256")
+        record_payload = {key: value for key, value in record.items() if key != "record_sha256"}
+        canonical = json.dumps(record_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        actual = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        if not isinstance(expected, str) or actual != expected:
+            return {"valid": False, "reason": f"Scenario ledger record {index} does not match its checksum."}
+    return {**bundle_result, "record_count": len(records), "reason": "Ledger and scenario record checksums match."}
+
+
 class LocalStore:
     """Local, transparent persistence for alert rules, saved views and audit events."""
 
@@ -144,8 +233,19 @@ class LocalStore:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     event_type TEXT NOT NULL,
                     details TEXT NOT NULL,
-                    created_at TEXT NOT NULL
+                    created_at TEXT NOT NULL,
+                    previous_hash TEXT,
+                    event_hash TEXT
                 );
+                """
+            )
+            columns = {row[1] for row in db.execute("PRAGMA table_info(events)").fetchall()}
+            if "previous_hash" not in columns:
+                db.execute("ALTER TABLE events ADD COLUMN previous_hash TEXT")
+            if "event_hash" not in columns:
+                db.execute("ALTER TABLE events ADD COLUMN event_hash TEXT")
+            db.executescript(
+                """
                 CREATE TABLE IF NOT EXISTS workspaces (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT UNIQUE NOT NULL,
@@ -157,10 +257,27 @@ class LocalStore:
         self.log("workspace_initialized", "Local workspace database is ready")
 
     def log(self, event_type: str, details: str) -> None:
+        created_at = datetime.now(timezone.utc).isoformat()
         with self._session() as db:
+            previous = db.execute(
+                "SELECT event_hash FROM events WHERE event_hash IS NOT NULL ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            previous_hash = str(previous[0]) if previous and previous[0] else "GENESIS"
+            canonical = json.dumps(
+                {
+                    "event_type": event_type,
+                    "details": details,
+                    "created_at": created_at,
+                    "previous_hash": previous_hash,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            event_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
             db.execute(
-                "INSERT INTO events(event_type, details, created_at) VALUES (?, ?, ?)",
-                (event_type, details, datetime.now(timezone.utc).isoformat()),
+                "INSERT INTO events(event_type, details, created_at, previous_hash, event_hash) VALUES (?, ?, ?, ?, ?)",
+                (event_type, details, created_at, previous_hash, event_hash),
             )
 
     def save_alert(self, indicator: str, operator: str, threshold: float) -> None:
@@ -187,6 +304,51 @@ class LocalStore:
             return db.execute(
                 "SELECT event_type, details, created_at FROM events ORDER BY id DESC LIMIT ?", (limit,)
             ).fetchall()
+
+    def verify_audit_chain(self) -> dict[str, Any]:
+        """Verify the hash-linked portion of the local event log without rewriting history."""
+        with self._session() as db:
+            rows = db.execute(
+                "SELECT id, event_type, details, created_at, previous_hash, event_hash FROM events ORDER BY id ASC"
+            ).fetchall()
+        prior = "GENESIS"
+        chained_events = 0
+        legacy_events = 0
+        for event_id, event_type, details, created_at, previous_hash, event_hash in rows:
+            if not event_hash:
+                legacy_events += 1
+                continue
+            expected_previous = prior
+            canonical = json.dumps(
+                {
+                    "event_type": event_type,
+                    "details": details,
+                    "created_at": created_at,
+                    "previous_hash": previous_hash,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            expected_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            if previous_hash != expected_previous or event_hash != expected_hash:
+                return {
+                    "verified": False,
+                    "state": "CHAIN BREAK DETECTED",
+                    "checked_events": chained_events,
+                    "legacy_events": legacy_events,
+                    "failed_event_id": int(event_id),
+                }
+            prior = str(event_hash)
+            chained_events += 1
+        state = "VERIFIED" if chained_events else "NO CHAINED EVENTS"
+        return {
+            "verified": True,
+            "state": state,
+            "checked_events": chained_events,
+            "legacy_events": legacy_events,
+            "latest_hash": prior if chained_events else None,
+        }
 
     def list_workspaces(self, limit: int = 20) -> list[tuple[str, dict[str, Any], str]]:
         with self._session() as db:
@@ -702,13 +864,25 @@ class MainWindow(QMainWindow):
         layout.addWidget(SectionTitle("Governed collaboration", "Workspace", "Save decision context locally, retain traceable events and prepare controlled exports."))
         grid = QGridLayout()
         grid.setHorizontalSpacing(16)
-        boards, boards_layout = frame("Scenario library", "Saved local scenarios are traceable artifacts ready for controlled evidence export.")
-        self.workspace_table = make_table(["Scenario", "Country", "Stress", "Saved at"], [])
+        boards, boards_layout = frame("Scenario library", "Versioned local scenarios retain assumptions, decision state and a verifiable governance ledger.")
+        self.workspace_table = make_table(["Scenario", "Country", "Stress", "Score", "Gate", "Saved at"], [])
         boards_layout.addWidget(self.workspace_table)
         export_evidence = QPushButton("Export decision evidence pack")
         export_evidence.setObjectName("primaryButton")
         export_evidence.clicked.connect(self._export_evidence_pack)
+        verify_evidence = QPushButton("Verify an evidence pack")
+        verify_evidence.setObjectName("secondaryButton")
+        verify_evidence.clicked.connect(self._verify_evidence_pack)
+        export_ledger = QPushButton("Export scenario governance ledger")
+        export_ledger.setObjectName("secondaryButton")
+        export_ledger.clicked.connect(self._export_scenario_ledger)
+        verify_ledger = QPushButton("Verify a scenario ledger")
+        verify_ledger.setObjectName("secondaryButton")
+        verify_ledger.clicked.connect(self._verify_scenario_ledger)
         boards_layout.addWidget(export_evidence)
+        boards_layout.addWidget(verify_evidence)
+        boards_layout.addWidget(export_ledger)
+        boards_layout.addWidget(verify_ledger)
         self.evidence_status_label = QLabel("Evidence pack: ready after a source refresh")
         self.evidence_status_label.setObjectName("metricDelta")
         boards_layout.addWidget(self.evidence_status_label)
@@ -718,8 +892,31 @@ class MainWindow(QMainWindow):
         audit_layout.addWidget(self.audit_table)
         grid.addWidget(audit, 0, 1)
         layout.addLayout(grid)
+        readiness, readiness_layout = frame(
+            "Decision readiness gate",
+            "An explainable local control that surfaces source quality, alert conditions and audit-chain integrity before evidence is shared.",
+        )
+        readiness_head = QHBoxLayout()
+        self.decision_readiness_label = QLabel("NOT READY")
+        self.decision_readiness_label.setObjectName("decisionReadiness")
+        self.audit_integrity_label = QLabel("AUDIT CHECK PENDING")
+        self.audit_integrity_label.setObjectName("auditIntegrity")
+        readiness_head.addWidget(self.decision_readiness_label)
+        readiness_head.addStretch()
+        readiness_head.addWidget(self.audit_integrity_label)
+        self.decision_readiness_summary = QLabel("Refresh data to calculate the local decision gate.")
+        self.decision_readiness_summary.setObjectName("panelSubtitle")
+        self.decision_readiness_summary.setWordWrap(True)
+        self.decision_readiness_blockers = QLabel("")
+        self.decision_readiness_blockers.setObjectName("metricDelta")
+        self.decision_readiness_blockers.setWordWrap(True)
+        readiness_layout.addLayout(readiness_head)
+        readiness_layout.addWidget(self.decision_readiness_summary)
+        readiness_layout.addWidget(self.decision_readiness_blockers)
+        layout.addWidget(readiness)
         self._refresh_audit()
         self._refresh_workspace()
+        self._refresh_decision_readiness()
         layout.addStretch()
         return scroll
 
@@ -819,6 +1016,7 @@ class MainWindow(QMainWindow):
         self._refresh_benchmark()
         self._refresh_assessment()
         self._evaluate_alerts()
+        self._refresh_decision_readiness()
         details = "\n".join(f"{INDICATORS[key][0]}: {source}" for key, source in provenance.items())
         self.provenance_label.setText(details)
         health_summary = " · ".join(
@@ -933,6 +1131,7 @@ class MainWindow(QMainWindow):
         indicator = self.alert_indicator.currentText()
         self.store.save_alert(indicator, self.alert_operator.currentText(), threshold)
         self._evaluate_alerts()
+        self._refresh_decision_readiness()
         QMessageBox.information(self, "Alert rule created", f"EcoPulse will evaluate {indicator} {self.alert_operator.currentText()} {threshold:.2f} after each refresh.")
 
     def _update_scenario(self) -> None:
@@ -975,11 +1174,28 @@ class MainWindow(QMainWindow):
         self.scenario_table = new_table
 
     def _save_scenario(self) -> None:
+        risk_score = max(0, min(100, 50 + (self.inflation_slider.value() / 100 + self.current_data.get("inflation", [SeriesPoint("", 3.5)])[-1].value - 3) * 5 - (self.growth_slider.value() / 100 + self.current_data.get("gdp", [SeriesPoint("", 2.5)])[-1].value) * 8 + (self.labor_slider.value() / 100 + self.current_data.get("unemployment", [SeriesPoint("", 5.0)])[-1].value) * 3))
+        readiness = assess_decision_readiness(self.data_health, self.alert_hits)
+        source_snapshot = {
+            "latest_observations": {
+                key: {"period": points[-1].period, "value": points[-1].value}
+                for key, points in self.current_data.items() if points
+            },
+            "provenance": self.current_provenance,
+            "data_health": self.data_health,
+        }
+        snapshot_canonical = json.dumps(source_snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         payload = {
+            "schema": "ecopulse.scenario-record.v1",
             "country": self.country_combo.currentText(),
             "growth_shock": self.growth_slider.value() / 100,
             "inflation_shock": self.inflation_slider.value() / 100,
             "labor_shock": self.labor_slider.value() / 100,
+            "risk_score": round(risk_score),
+            "risk_state": self.scenario_status.text(),
+            "decision_readiness": readiness["state"],
+            "data_snapshot_sha256": hashlib.sha256(snapshot_canonical.encode("utf-8")).hexdigest(),
+            "model": {"name": "transparent_macro_heuristic", "version": "1"},
             "version": APP_VERSION,
         }
         name = f"Scenario · {datetime.now().strftime('%Y-%m-%d %H:%M')}"
@@ -998,10 +1214,12 @@ class MainWindow(QMainWindow):
                 f"I {float(payload.get('inflation_shock', 0)):+.2f} · "
                 f"L {float(payload.get('labor_shock', 0)):+.2f}"
             )
-            rows.append([name, country, stress, created_at.replace("T", " ")[:19]])
+            risk_score = payload.get("risk_score", "—")
+            gate = str(payload.get("decision_readiness", "LEGACY"))
+            rows.append([name, country, stress, str(risk_score), gate, created_at.replace("T", " ")[:19]])
         if not rows:
-            rows = [["No saved scenarios", "—", "Save an assumption set", "—"]]
-        table = make_table(["Scenario", "Country", "Stress", "Saved at"], rows)
+            rows = [["No saved scenarios", "—", "Save an assumption set", "—", "—", "—"]]
+        table = make_table(["Scenario", "Country", "Stress", "Score", "Gate", "Saved at"], rows)
         parent_layout = self.workspace_table.parentWidget().layout()
         previous = self.workspace_table
         parent_layout.replaceWidget(previous, table)
@@ -1009,6 +1227,56 @@ class MainWindow(QMainWindow):
         previous.setParent(None)
         previous.deleteLater()
         self.workspace_table = table
+
+    def build_scenario_ledger(self) -> dict[str, Any]:
+        """Build a locally verifiable ledger of saved scenario assumptions and decision context."""
+        records: list[dict[str, Any]] = []
+        for name, payload, created_at in self.store.list_workspaces(limit=500):
+            record: dict[str, Any] = {
+                "schema": "ecopulse.scenario-record.v1",
+                "name": name,
+                "created_at": created_at,
+                "payload": payload,
+            }
+            canonical = json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            record["record_sha256"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            records.append(record)
+        ledger: dict[str, Any] = {
+            "schema": "ecopulse.scenario-ledger.v1",
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "application": {"name": APP_NAME, "version": APP_VERSION, "mode": "local-first"},
+            "records": records,
+            "limitations": [
+                "Local governance ledger only; no remote approval or immutable central retention is enabled.",
+                "Integrity verification detects changes against stored checksums but does not establish external data origin.",
+            ],
+        }
+        canonical = json.dumps(ledger, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        ledger["integrity"] = {"algorithm": "SHA-256", "canonical_payload_sha256": hashlib.sha256(canonical.encode("utf-8")).hexdigest()}
+        return ledger
+
+    def _refresh_decision_readiness(self) -> None:
+        if not hasattr(self, "decision_readiness_label"):
+            return
+        readiness = assess_decision_readiness(self.data_health, self.alert_hits)
+        audit = self.store.verify_audit_chain()
+        colors = {
+            "READY FOR REVIEW": ACCENT,
+            "REVIEW REQUIRED": AMBER,
+            "BLOCKED": DANGER,
+            "NOT READY": MUTED,
+        }
+        self.decision_readiness_label.setText(f"{readiness['state']} · {readiness['score']}/100")
+        self.decision_readiness_label.setStyleSheet(f"color: {colors.get(readiness['state'], MUTED)};")
+        self.decision_readiness_summary.setText(readiness["summary"])
+        self.decision_readiness_blockers.setText(
+            " · ".join(readiness["blockers"]) if readiness["blockers"] else "No local blockers are currently detected."
+        )
+        audit_color = ACCENT if audit["verified"] else DANGER
+        self.audit_integrity_label.setText(
+            f"AUDIT {audit['state']} · {audit.get('checked_events', 0)} CHAINED EVENT(S)"
+        )
+        self.audit_integrity_label.setStyleSheet(f"color: {audit_color};")
 
     def build_evidence_bundle(self) -> dict[str, Any]:
         """Build a local, deterministic decision record without making enterprise compliance claims."""
@@ -1020,6 +1288,10 @@ class MainWindow(QMainWindow):
             "labor_shock": self.labor_slider.value() / 100 if hasattr(self, "labor_slider") else None,
             "status": self.scenario_status.text() if hasattr(self, "scenario_status") else "Not calculated",
         }
+        readiness = assess_decision_readiness(self.data_health, self.alert_hits)
+        audit_integrity = self.store.verify_audit_chain()
+        scenario_ledger = self.build_scenario_ledger()
+        ledger_verification = verify_scenario_ledger(scenario_ledger)
         bundle: dict[str, Any] = {
             "schema": "ecopulse.evidence-pack.v1",
             "generated_at": generated_at,
@@ -1037,6 +1309,13 @@ class MainWindow(QMainWindow):
                 for indicator, operator, threshold in self.store.active_alerts()
             ],
             "triggered_alerts": self.alert_hits,
+            "decision_readiness": readiness,
+            "audit_integrity": audit_integrity,
+            "scenario_governance": {
+                "record_count": ledger_verification.get("record_count", 0),
+                "ledger_sha256": scenario_ledger["integrity"]["canonical_payload_sha256"],
+                "verification_state": "valid" if ledger_verification["valid"] else "invalid",
+            },
             "recent_audit_events": [
                 {"event_type": event, "details": details, "created_at": timestamp}
                 for event, details, timestamp in self.store.recent_events(50)
@@ -1067,6 +1346,78 @@ class MainWindow(QMainWindow):
         self._refresh_audit()
         QMessageBox.information(self, "Evidence pack exported", "The local decision record includes lineage, data health, scenario state and an integrity checksum.")
 
+    def _export_scenario_ledger(self) -> None:
+        ledger = self.build_scenario_ledger()
+        if not ledger["records"]:
+            QMessageBox.information(self, "No scenario ledger", "Save at least one scenario before exporting the governance ledger.")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export EcoPulse scenario governance ledger", "ecopulse_scenario_ledger.json", "JSON files (*.json)"
+        )
+        if not path:
+            return
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(ledger, handle, ensure_ascii=False, indent=2)
+        self.store.log("scenario_ledger_exported", f"{len(ledger['records'])} records · {ledger['integrity']['canonical_payload_sha256'][:12]} · {path}")
+        self._refresh_audit()
+        QMessageBox.information(self, "Scenario ledger exported", "The local scenario governance ledger includes record-level and ledger-level SHA-256 checksums.")
+
+    def _verify_scenario_ledger(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Verify EcoPulse scenario governance ledger", "", "JSON files (*.json)"
+        )
+        if not path:
+            return
+        try:
+            with open(path, encoding="utf-8") as handle:
+                ledger = json.load(handle)
+            if not isinstance(ledger, dict):
+                raise ValueError("Scenario ledger JSON must be an object.")
+            result = verify_scenario_ledger(ledger)
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            self.store.log("scenario_ledger_verification_failed", f"{Path(path).name} · {exc}")
+            self._refresh_audit()
+            QMessageBox.warning(self, "Scenario ledger verification", str(exc))
+            return
+        status = "valid" if result["valid"] else "invalid"
+        self.store.log("scenario_ledger_verified", f"{Path(path).name} · {status}")
+        self._refresh_audit()
+        if result["valid"]:
+            self.evidence_status_label.setText(f"Scenario ledger verified · {result.get('record_count', 0)} record(s)")
+            QMessageBox.information(self, "Scenario ledger verification", result["reason"])
+        else:
+            self.evidence_status_label.setText("Scenario ledger verification failed · checksum mismatch")
+            QMessageBox.critical(self, "Scenario ledger verification", result["reason"])
+
+    def _verify_evidence_pack(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Verify EcoPulse decision evidence", "", "JSON files (*.json)"
+        )
+        if not path:
+            return
+        try:
+            with open(path, encoding="utf-8") as handle:
+                bundle = json.load(handle)
+            if not isinstance(bundle, dict) or bundle.get("schema") != "ecopulse.evidence-pack.v1":
+                raise ValueError("This file is not an EcoPulse v1 decision evidence pack.")
+            result = verify_evidence_bundle(bundle)
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            self.store.log("evidence_pack_verification_failed", f"{Path(path).name} · {exc}")
+            self._refresh_audit()
+            QMessageBox.warning(self, "Evidence verification", str(exc))
+            return
+        status = "valid" if result["valid"] else "invalid"
+        self.store.log("evidence_pack_verified", f"{Path(path).name} · {status}")
+        self._refresh_audit()
+        if result["valid"]:
+            self.evidence_status_label.setText(
+                f"Evidence verified · SHA-256 {result['computed_sha256'][:12]}…"
+            )
+            QMessageBox.information(self, "Evidence verification", "Integrity checksum matches the evidence payload.")
+        else:
+            self.evidence_status_label.setText("Evidence verification failed · payload checksum mismatch")
+            QMessageBox.critical(self, "Evidence verification", result["reason"])
+
     def _export_policy_manifest(self) -> None:
         manifest = {
             "schema": "ecopulse.guardrails-manifest.v1",
@@ -1077,6 +1428,8 @@ class MainWindow(QMainWindow):
                 "remote_identity": False,
                 "licensed_data_broker": False,
                 "evidence_export": "local-json-sha256",
+                "local_audit_integrity": "sha256-hash-chain-verification",
+                "scenario_governance": "versioned-local-records-with-ledger-sha256",
                 "sensitive_external_actions": "disabled",
             },
             "enterprise_next_steps": [
@@ -1110,6 +1463,7 @@ class MainWindow(QMainWindow):
         previous.setParent(None)
         previous.deleteLater()
         self.audit_table = table
+        self._refresh_decision_readiness()
 
     def _export_series(self) -> None:
         if not self.current_data:
@@ -1193,7 +1547,8 @@ QFrame#panel {{ background: {SURFACE}; border: 1px solid #22334F; border-radius:
 QLabel#panelTitle {{ color: {TEXT}; font-size: 15px; font-weight: 750; }}
 QLabel#panelSubtitle, QLabel#provenance {{ color: #92A1B7; font-size: 11px; line-height: 1.45; }}
 QLabel#alertCount {{ color: {ACCENT}; font-size: 22px; font-weight: 750; padding: 6px 0; }}
-QLabel#regimeLabel, QLabel#scenarioStatus {{ font-size: 22px; font-weight: 800; letter-spacing: 1px; }}
+QLabel#regimeLabel, QLabel#scenarioStatus, QLabel#decisionReadiness {{ font-size: 22px; font-weight: 800; letter-spacing: 1px; }}
+QLabel#auditIntegrity {{ font-size: 10px; font-weight: 800; letter-spacing: 0.7px; }}
 QLabel#scenarioSummary {{ color: #AAB8C8; font-size: 13px; line-height: 1.45; }}
 QFrame#scenarioControl {{ background: #101D31; border: 1px solid #263A59; border-radius: 9px; }}
 QLabel#scenarioLabel {{ color: #B9C7DA; font-weight: 700; }}
