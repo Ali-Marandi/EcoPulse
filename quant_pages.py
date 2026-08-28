@@ -1,8 +1,23 @@
 """EcoPulse Quant Pages — advanced quantitative model panels.
 
-Three page-builder functions that expose the quant_engine models through the
+Twelve page-builder functions that expose the quant_engine models through the
 customary EcoPulse dark-theme UI patterns (frame, make_table, SectionTitle,
 pyqtgraph charts wrapped in QScrollArea).
+
+Pages
+-----
+ 7.  Macro Simulator        — DSGE, Taylor Rule, Phillips, Minsky, Kondratiev
+ 8.  Risk Analytics         — GARCH, Monte Carlo, Black-Litterman
+ 9.  Information Flow       — Transfer entropy, Prospect Theory
+10.  Time Series Lab        — PCA, ARIMA, VAR, Granger, CUSUM
+11.  Network & Anomaly      — Contagion, DebtRank, fraud detection
+12.  Political & Climate     — ICRG, sanctions, Climate VaR, Hotelling
+13.  Markets & Pricing       — Black-Scholes, Vasicek, CIR, Akerlof
+14.  Regulatory & EMH        — Basel III, EMH, fuzzy credit scoring
+15.  Causal & Epidemic       — DAG, DID, IV/2SLS, Double ML, PSM, SIR
+16.  Fuzzy Decision Lab     — AHP, TOPSIS, ANFIS, Fuzzy BS, Fuzzy Portfolio
+17.  Advanced Markets        — Spence, RS screening, auctions, HW, Mechanism Design
+18.  Compliance Suite       — MiFID II, Dodd-Frank, Event Study
 """
 from __future__ import annotations
 

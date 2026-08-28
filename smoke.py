@@ -1,4 +1,8 @@
-"""Offline smoke tests for the repository-root EcoPulse desktop build."""
+"""Offline smoke tests for EcoPulse desktop build.
+
+Validates core pages, quantitative page construction, data persistence,
+Data Health scoring, scenario logic and evidence bundle integrity.
+"""
 from __future__ import annotations
 
 import os
@@ -8,9 +12,52 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication
 from app import EconomicDataService, INDICATORS, LocalStore, MainWindow, assess_data_health
+from quant_pages import (
+    build_macro_simulator_page,
+    build_risk_analytics_page,
+    build_information_flow_page,
+    build_time_series_lab_page,
+    build_network_anomaly_page,
+    build_political_climate_page,
+    build_markets_pricing_page,
+    build_regulatory_emh_page,
+    build_causal_epidemiological_page,
+    build_fuzzy_decision_page,
+    build_advanced_markets_page,
+    build_compliance_suite_page,
+)
+
+_ALL_QUANT_BUILDERS = [
+    build_macro_simulator_page,
+    build_risk_analytics_page,
+    build_information_flow_page,
+    build_time_series_lab_page,
+    build_network_anomaly_page,
+    build_political_climate_page,
+    build_markets_pricing_page,
+    build_regulatory_emh_page,
+    build_causal_epidemiological_page,
+    build_fuzzy_decision_page,
+    build_advanced_markets_page,
+    build_compliance_suite_page,
+]
 
 
-def main() -> None:
+def test_quant_page_construction() -> None:
+    """Verify every quantitative page builds without raising an exception."""
+    qt = QApplication.instance() or QApplication([])
+    # Build a minimal MainWindow stub so page builders can reference parent
+    window = MainWindow.__new__(MainWindow)
+    # Avoid triggering _build_window during __new__
+    for builder in _ALL_QUANT_BUILDERS:
+        page = builder(window)
+        assert page is not None, f"{builder.__name__} returned None"
+        page.deleteLater()
+    print(f"All {len(_ALL_QUANT_BUILDERS)} quant pages constructed successfully")
+
+
+def test_core_app() -> None:
+    """Validate core app functionality: data service, persistence, evidence."""
     temp = tempfile.TemporaryDirectory()
     os.environ["APPDATA"] = temp.name
 
@@ -47,7 +94,13 @@ def main() -> None:
     window.close()
     qt.quit()
     temp.cleanup()
-    print("EcoPulse smoke tests passed")
+    print("Core app smoke tests passed")
+
+
+def main() -> None:
+    test_quant_page_construction()
+    test_core_app()
+    print("All EcoPulse smoke tests passed")
 
 
 if __name__ == "__main__":
