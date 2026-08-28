@@ -46,8 +46,23 @@ from PySide6.QtWidgets import (
     QFileDialog,
 )
 
+from quant_pages import (
+    build_macro_simulator_page,
+    build_risk_analytics_page,
+    build_information_flow_page,
+    build_time_series_lab_page,
+    build_network_anomaly_page,
+    build_political_climate_page,
+    build_markets_pricing_page,
+    build_regulatory_emh_page,
+    build_causal_epidemiological_page,
+    build_fuzzy_decision_page,
+    build_advanced_markets_page,
+    build_compliance_suite_page,
+)
+
 APP_NAME = "EcoPulse"
-APP_VERSION = "1.1.0"
+APP_VERSION = "2.1.0"
 ACCENT = "#54E1B6"
 ACCENT_DARK = "#1BBE91"
 BLUE = "#67A7FF"
@@ -398,6 +413,18 @@ class MainWindow(QMainWindow):
         self.pages.addWidget(self._build_workspace())
         self.pages.addWidget(self._build_sources())
         self.pages.addWidget(self._build_settings())
+        self.pages.addWidget(build_macro_simulator_page(self))
+        self.pages.addWidget(build_risk_analytics_page(self))
+        self.pages.addWidget(build_information_flow_page(self))
+        self.pages.addWidget(build_time_series_lab_page(self))
+        self.pages.addWidget(build_network_anomaly_page(self))
+        self.pages.addWidget(build_political_climate_page(self))
+        self.pages.addWidget(build_markets_pricing_page(self))
+        self.pages.addWidget(build_regulatory_emh_page(self))
+        self.pages.addWidget(build_causal_epidemiological_page(self))
+        self.pages.addWidget(build_fuzzy_decision_page(self))
+        self.pages.addWidget(build_advanced_markets_page(self))
+        self.pages.addWidget(build_compliance_suite_page(self))
         content_layout.addWidget(self.pages, 1)
         shell.addWidget(content, 1)
         self.setStyleSheet(STYLESHEET)
@@ -424,6 +451,18 @@ class MainWindow(QMainWindow):
             ("Workspace", "Saved boards and audit log"),
             ("Data Sources", "Coverage and provenance"),
             ("Settings", "Workspace preferences"),
+            ("Macro Simulator", "DSGE, Taylor Rule, Minsky cycle"),
+            ("Risk Analytics", "GARCH, Monte Carlo, VaR"),
+            ("Information Flow", "Transfer entropy, behavioral models"),
+            ("Time Series Lab", "PCA, ARIMA, Granger, CUSUM"),
+            ("Network & Anomaly", "Contagion, fraud, manipulation"),
+            ("Political & Climate", "ICRG, sanctions, Climate VaR"),
+            ("Markets & Pricing", "Black-Scholes, Vasicek, Akerlof"),
+            ("Regulatory & EMH", "Basel III, EMH, fuzzy credit"),
+            ("Causal & Epidemic", "DAG, DID, SIR impact"),
+            ("Fuzzy Decision Lab", "AHP, TOPSIS, ANFIS"),
+            ("Advanced Markets", "Spence, auctions, Hull-White"),
+            ("Compliance Suite", "MiFID II, Dodd-Frank, event study"),
         ]
         for index, (label, hint) in enumerate(items):
             button = QPushButton(label)
@@ -782,7 +821,14 @@ class MainWindow(QMainWindow):
         self.pages.setCurrentIndex(index)
         for position, button in enumerate(self.nav_buttons):
             button.setChecked(position == index)
-        contexts = ["COMMAND CENTER", "INTELLIGENCE DESK", "SCENARIO STUDIO", "WORKSPACE", "DATA SOURCES", "SETTINGS"]
+        contexts = [
+            "COMMAND CENTER", "INTELLIGENCE DESK", "SCENARIO STUDIO", "WORKSPACE",
+            "DATA SOURCES", "SETTINGS", "MACRO SIMULATOR", "RISK ANALYTICS",
+            "INFORMATION FLOW", "TIME SERIES LAB", "NETWORK & ANOMALY",
+            "POLITICAL & CLIMATE", "MARKETS & PRICING", "REGULATORY & EMH",
+            "CAUSAL & EPIDEMIC", "FUZZY DECISION LAB", "ADVANCED MARKETS",
+            "COMPLIANCE SUITE",
+        ]
         self.context_label.setText(contexts[index])
         if index == 3:
             self._refresh_audit()
