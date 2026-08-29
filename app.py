@@ -62,7 +62,7 @@ from quant_pages import (
 )
 
 APP_NAME = "EcoPulse"
-APP_VERSION = "2.3.0"
+APP_VERSION = "2.4.0"
 ACCENT = "#54E1B6"
 ACCENT_DARK = "#1BBE91"
 BLUE = "#67A7FF"
