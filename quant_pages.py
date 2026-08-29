@@ -406,7 +406,8 @@ def build_risk_analytics_page(parent: QWidget) -> QWidget:
     ))
 
     # ---- Panel 1: GARCH Volatility ----
-    garch_panel, garch_lay = frame("GARCH(1,1) Volatility Model", "Fit GARCH(1,1) to GDP growth data. Shows conditional volatility, VaR and CVaR at 95% confidence.")
+    garch_panel, garch_lay = frame("GARCH(1,1) Volatility Model", "Fit GARCH(1,1) to GDP growth data. Adjust VaR confidence level interactively.")
+    s_garch_conf, _ = _slider_row("VaR confidence (% x10)", 90, 99, 95, garch_lay, divisor=10)
     garch_plot = _styled_plot(280)
     garch_lay.addWidget(garch_plot, 1)
     garch_info = QLabel("Computing…")
@@ -416,117 +417,124 @@ def build_risk_analytics_page(parent: QWidget) -> QWidget:
     garch_lay.addStretch()
     root.addWidget(garch_panel)
 
-    try:
-        data = parent.current_data if parent.current_data else {}
-        gdp_values = _extract_values(data, "gdp")
-        if len(gdp_values) >= 12:
-            returns = np.diff(gdp_values) / np.abs(gdp_values[:-1]) * 100
-            returns = returns - np.mean(returns)  # demean
-            garch = GARCH11(returns).fit()
-            sigma_cond = np.sqrt(garch.conditional_sigma2)
-            var95 = garch.var(confidence=0.95)
-            cvar95 = garch.cvar(confidence=0.95)
-            x = np.arange(len(returns))
+    def _run_garch() -> None:
+        try:
+            data = parent.current_data if parent.current_data else {}
+            gdp_values = _extract_values(data, "gdp")
+            if len(gdp_values) >= 12:
+                returns = np.diff(gdp_values) / np.abs(gdp_values[:-1]) * 100
+                returns = returns - np.mean(returns)
+                garch = GARCH11(returns).fit()
+                sigma_cond = np.sqrt(garch.conditional_sigma2)
+                conf = s_garch_conf.value() / 10
+                var_val = garch.var(confidence=conf)
+                cvar_val = garch.cvar(confidence=conf)
+                x = np.arange(len(returns))
+                garch_plot.clear()
+                garch_plot.plot(x, returns, pen=pg.mkPen(BLUE, width=1.5), name="GDP returns")
+                garch_plot.plot(x, sigma_cond, pen=pg.mkPen(AMBER, width=2), name="Cond. volatility σ")
+                garch_plot.plot(x, -sigma_cond, pen=pg.mkPen(AMBER, width=2))
+                garch_plot.addLine(y=var_val, pen=pg.mkPen(DANGER, width=1, style=Qt.PenStyle.DashLine), label=f"VaR({conf:.0%})={var_val:.4f}")
+                garch_plot.setLabel("left", "%")
+                garch_plot.setLabel("bottom", "Period")
+                garch_plot.setTitle("GARCH(1,1) Conditional Volatility", color=TEXT, size="12pt")
+                persistence = garch.alpha + garch.beta
+                garch_info.setText(
+                    f"ω = {garch.omega:.6f}  ·  α = {garch.alpha:.4f}  ·  β = {garch.beta:.4f}  ·  "
+                    f"Persistence = {persistence:.4f}  ·  VaR({conf:.0%}) = {var_val:.4f}  ·  CVaR({conf:.0%}) = {cvar_val:.4f}"
+                )
+            else:
+                garch_plot.clear()
+                garch_plot.setTitle("Insufficient data — need ≥ 12 GDP observations", color=AMBER, size="12pt")
+                garch_info.setText("Load a country dataset via the top bar to enable GARCH fitting.")
+        except Exception as exc:
             garch_plot.clear()
-            garch_plot.plot(x, returns, pen=pg.mkPen(BLUE, width=1.5), name="GDP returns")
-            garch_plot.plot(x, sigma_cond, pen=pg.mkPen(AMBER, width=2), name="Cond. volatility σ")
-            garch_plot.plot(x, -sigma_cond, pen=pg.mkPen(AMBER, width=2))
-            garch_plot.addLine(y=var95, pen=pg.mkPen(DANGER, width=1, style=Qt.PenStyle.DashLine), label=f"VaR(95%)={var95:.4f}")
-            garch_plot.setLabel("left", "%")
-            garch_plot.setLabel("bottom", "Period")
-            garch_plot.setTitle("GARCH(1,1) Conditional Volatility", color=TEXT, size="12pt")
-            persistence = garch.alpha + garch.beta
-            garch_info.setText(
-                f"ω = {garch.omega:.6f}  ·  α = {garch.alpha:.4f}  ·  β = {garch.beta:.4f}  ·  "
-                f"Persistence (α+β) = {persistence:.4f}  ·  VaR(95%) = {var95:.4f}  ·  CVaR(95%) = {cvar95:.4f}"
-            )
-        else:
-            garch_plot.clear()
-            garch_plot.setTitle("Insufficient data — need ≥ 12 GDP observations", color=AMBER, size="12pt")
-            garch_info.setText("Load a country dataset via the top bar to enable GARCH fitting.")
-    except Exception as exc:
-        garch_plot.clear()
-        garch_plot.setTitle(f"GARCH Error: {exc}", color=DANGER, size="12pt")
-        garch_info.setText(str(exc))
+            garch_plot.setTitle(f"GARCH Error: {exc}", color=DANGER, size="12pt")
+            garch_info.setText(str(exc))
+
+    s_garch_conf.valueChanged.connect(_run_garch)
+    _run_garch()
 
     # ---- Panel 2: Monte Carlo Portfolio Simulation ----
-    mc_panel, mc_lay = frame("Monte Carlo Portfolio Simulation", "Simulate 50 correlated GBM paths for a 4-asset portfolio. Shows VaR, CVaR and portfolio standard deviation.")
+    mc_panel, mc_lay = frame("Monte Carlo Portfolio Simulation", "Simulate correlated GBM paths. Adjust paths count, confidence level and time steps, then recompute VaR/CVaR.")
+    s_mc_paths, _ = _slider_row("Simulation paths", 100, 500, 200, mc_lay)
+    s_mc_conf, _ = _slider_row("Confidence level (% x10)", 90, 99, 95, mc_lay, divisor=10)
+    s_mc_steps, _ = _slider_row("Time steps", 10, 100, 50, mc_lay)
+    btn_mc = QPushButton("Run Simulation")
+    btn_mc.setObjectName("secondaryButton")
+    mc_lay.addWidget(btn_mc)
     mc_plot = _styled_plot(300)
     mc_lay.addWidget(mc_plot, 1)
-    mc_info = QLabel("Computing…")
+    mc_info = QLabel("Press Run Simulation")
     mc_info.setObjectName("panelSubtitle")
     mc_info.setWordWrap(True)
     mc_lay.addWidget(mc_info)
     mc_lay.addStretch()
     root.addWidget(mc_panel)
 
-    try:
-        data = parent.current_data if parent.current_data else {}
-        gdp_v = _extract_values(data, "gdp")
-        infl_v = _extract_values(data, "inflation")
-        unemp_v = _extract_values(data, "unemployment")
-        inv_v = _extract_values(data, "investment")
+    def _safe_mu(arr, default):
+        if len(arr) >= 4:
+            return np.mean(np.diff(arr) / 100) * 252 if np.mean(np.abs(arr)) > 10 else np.mean(arr) / 100
+        return default
 
-        # Seed the portfolio with actual data stats where available, otherwise synthetic
-        def _safe_mu(arr, default, scale=0.05):
-            if len(arr) >= 4:
-                return np.mean(np.diff(arr) / 100) * 252 if np.mean(np.abs(arr)) > 10 else np.mean(arr) / 100
-            return default
+    def _safe_sigma(arr, default):
+        if len(arr) >= 4:
+            return max(np.std(arr) / 100, 0.05)
+        return default
 
-        def _safe_sigma(arr, default):
-            if len(arr) >= 4:
-                return max(np.std(arr) / 100, 0.05)
-            return default
+    def _run_mc() -> None:
+        try:
+            data = parent.current_data if parent.current_data else {}
+            gdp_v = _extract_values(data, "gdp")
+            infl_v = _extract_values(data, "inflation")
+            unemp_v = _extract_values(data, "unemployment")
+            inv_v = _extract_values(data, "investment")
 
-        mu_vec = np.array([
-            _safe_mu(gdp_v, 0.08),
-            _safe_mu(infl_v, 0.03),
-            _safe_mu(unemp_v, 0.02),
-            _safe_mu(inv_v, 0.05),
-        ])
-        # Ensure reasonable drift
-        mu_vec = np.clip(mu_vec, -0.05, 0.15)
-        sigmas = np.array([
-            _safe_sigma(gdp_v, 0.15),
-            _safe_sigma(infl_v, 0.08),
-            _safe_sigma(unemp_v, 0.06),
-            _safe_sigma(inv_v, 0.12),
-        ])
-        # Build covariance matrix
-        corr = np.array([
-            [1.0, 0.3, -0.4, 0.5],
-            [0.3, 1.0, 0.2, 0.1],
-            [-0.4, 0.2, 1.0, -0.1],
-            [0.5, 0.1, -0.1, 1.0],
-        ])
-        cov = np.outer(sigmas, sigmas) * corr
-        weights = np.array([0.4, 0.2, 0.15, 0.25])
+            mu_vec = np.array([
+                _safe_mu(gdp_v, 0.08), _safe_mu(infl_v, 0.03),
+                _safe_mu(unemp_v, 0.02), _safe_mu(inv_v, 0.05),
+            ])
+            mu_vec = np.clip(mu_vec, -0.05, 0.15)
+            sigmas = np.array([
+                _safe_sigma(gdp_v, 0.15), _safe_sigma(infl_v, 0.08),
+                _safe_sigma(unemp_v, 0.06), _safe_sigma(inv_v, 0.12),
+            ])
+            corr = np.array([[1.0, 0.3, -0.4, 0.5], [0.3, 1.0, 0.2, 0.1],
+                              [-0.4, 0.2, 1.0, -0.1], [0.5, 0.1, -0.1, 1.0]])
+            cov = np.outer(sigmas, sigmas) * corr
+            weights = np.array([0.4, 0.2, 0.15, 0.25])
 
-        engine = MonteCarloRiskEngine(weights, mu_vec, cov)
-        sim = engine.simulate(T=1.0, n_steps=50, n_paths=50, seed=42)
-        paths = sim["portfolio_paths"]  # (50, 51)
+            n_paths = s_mc_paths.value()
+            conf = s_mc_conf.value() / 10
+            n_steps = s_mc_steps.value()
 
-        mc_plot.clear()
-        for i in range(min(50, paths.shape[0])):
-            alpha_val = 80 if i < 10 else 30
-            mc_plot.plot(np.arange(paths.shape[1]), paths[i], pen=pg.mkPen(BLUE, width=1))
-        mc_plot.setLabel("left", "Portfolio value")
-        mc_plot.setLabel("bottom", "Step")
-        mc_plot.setTitle("50 Monte Carlo Portfolio Paths", color=TEXT, size="12pt")
+            engine = MonteCarloRiskEngine(weights, mu_vec, cov)
+            sim = engine.simulate(T=1.0, n_steps=n_steps, n_paths=n_paths, seed=42)
+            paths = sim["portfolio_paths"]
 
-        # Compute risk metrics
-        report = engine.risk_report(confidence=0.95, n_paths=5000, seed=42)
-        mc_var = report["monte_carlo"]["var"]
-        mc_cvar = report["monte_carlo"]["cvar"]
-        mc_std = report["monte_carlo"]["std_return"]
-        mc_info.setText(
-            f"VaR(95%) = {mc_var:.4f}  ·  CVaR(95%) = {mc_cvar:.4f}  ·  Portfolio Std = {mc_std:.4f}  ·  "
-            f"Mean return = {report['monte_carlo']['mean_return']:.4f}"
-        )
-    except Exception as exc:
-        mc_plot.clear()
-        mc_plot.setTitle(f"Monte Carlo Error: {exc}", color=DANGER, size="12pt")
-        mc_info.setText(str(exc))
+            mc_plot.clear()
+            show_n = min(n_paths, 50)
+            for i in range(show_n):
+                mc_plot.plot(np.arange(paths.shape[1]), paths[i], pen=pg.mkPen(BLUE, width=1))
+            mc_plot.setLabel("left", "Portfolio value")
+            mc_plot.setLabel("bottom", "Step")
+            mc_plot.setTitle(f"{n_paths} Monte Carlo Paths ({n_steps} steps)", color=TEXT, size="12pt")
+
+            report = engine.risk_report(confidence=conf, n_paths=max(n_paths, 2000), seed=42)
+            mc_var = report["monte_carlo"]["var"]
+            mc_cvar = report["monte_carlo"]["cvar"]
+            mc_std = report["monte_carlo"]["std_return"]
+            mc_info.setText(
+                f"VaR({conf:.0%}) = {mc_var:.4f}  ·  CVaR({conf:.0%}) = {mc_cvar:.4f}  ·  Std = {mc_std:.4f}  ·  "
+                f"Mean = {report['monte_carlo']['mean_return']:.4f}"
+            )
+        except Exception as exc:
+            mc_plot.clear()
+            mc_plot.setTitle(f"Monte Carlo Error: {exc}", color=DANGER, size="12pt")
+            mc_info.setText(str(exc))
+
+    btn_mc.clicked.connect(_run_mc)
+    _run_mc()
 
     # ---- Panel 3: Black-Litterman Portfolio ----
     bl_panel, bl_lay = frame("Black-Litterman Portfolio", "Bayesian portfolio model combining market equilibrium with investor views. Shows implied vs. posterior expected returns.")
@@ -603,78 +611,43 @@ def build_information_flow_page(parent: QWidget) -> QWidget:
     ))
 
     # ---- Panel 1: Transfer Entropy Matrix ----
-    te_panel, te_lay = frame("Transfer Entropy Matrix", "Measures directional information transfer between GDP, Inflation, Unemployment and Investment. Rows = target, columns = source.")
+    te_panel, te_lay = frame("Transfer Entropy Matrix", "Measures directional information transfer. Adjust lag and bins to control TE granularity.")
     names = ["GDP", "Inflation", "Unemployment", "Investment"]
     keys = ["gdp", "inflation", "unemployment", "investment"]
+    s_te_lag, _ = _slider_row("TE lag", 1, 5, 1, te_lay)
+    s_te_bins, _ = _slider_row("TE bins", 4, 16, 8, te_lay)
+    btn_te = QPushButton("Compute Transfer Entropy")
+    btn_te.setObjectName("secondaryButton")
+    te_lay.addWidget(btn_te)
     data = parent.current_data if parent.current_data else {}
     has_data = all(len(data.get(k, [])) >= 12 for k in keys)
 
-    if has_data:
-        try:
-            series_matrix = np.column_stack([_extract_values(data, k) for k in keys]).T  # (4, T)
-            te_matrix = np.zeros((4, 4))
-            for i in range(4):
-                for j in range(4):
-                    if i != j:
-                        res = transfer_entropy(series_matrix[j], series_matrix[i], lag=1, bins=8)
-                        te_matrix[i, j] = res["te"]
-
-            # Build table rows with highlighting for column leaders
-            te_rows: list[list[str]] = []
-            for i in range(4):
-                row: list[str] = []
-                for j in range(4):
-                    if i == j:
-                        row.append("—")
-                    else:
-                        val = te_matrix[i, j]
-                        # Check if this is the max in column j (leader→follower)
-                        col_vals = [te_matrix[ii, j] for ii in range(4) if ii != j]
-                        is_leader = val == max(col_vals) and val > 0
-                        prefix = "▶ " if is_leader else "  "
-                        row.append(f"{prefix}{val:.4f}")
-                te_rows.append(row)
-            te_table = make_table(["Target → Source"] + names, te_rows)
-            te_lay.addWidget(te_table)
-
-            # Explanation label
-            te_note = QLabel("▶ marks the strongest information source for each target variable (highest TE in each column).")
-            te_note.setObjectName("panelSubtitle")
-            te_note.setWordWrap(True)
-            te_lay.addWidget(te_note)
-        except Exception as exc:
-            te_lay.addWidget(QLabel(f"TE computation error: {exc}"))
-    else:
-        te_lay.addWidget(QLabel("No data loaded. Refresh a country dataset from the top bar to compute transfer entropy."))
-    te_lay.addStretch()
-    root.addWidget(te_panel)
-
     # ---- Panel 2: Information Flow Bar Chart ----
-    bar_panel, bar_lay = frame("Information Flow Chart", "Bar chart of transfer entropy values. Taller bars indicate stronger directional information flow.")
+    bar_panel, bar_lay = frame("Information Flow Chart", "Bar chart of transfer entropy values. Recomputes when you click Compute.")
     bar_plot = _styled_plot(280)
     bar_lay.addWidget(bar_plot, 1)
     bar_lay.addStretch()
     root.addWidget(bar_panel)
 
-    if has_data:
+    te_matrix_ref = [None]  # mutable container for bar chart access
+
+    def _update_bar() -> None:
+        if te_matrix_ref[0] is None:
+            return
+        tm = te_matrix_ref[0]
         try:
             bar_plot.clear()
-            # Show TE as grouped bars: for each target (group), show TE from each source
-            n_pairs = 12  # 4x4 minus diagonal
             labels = []
             values = []
             colors = []
             color_map = [ACCENT, AMBER, BLUE, DANGER]
-            idx = 0
             for i in range(4):
                 for j in range(4):
                     if i == j:
                         continue
                     labels.append(f"{names[j][:3]}→{names[i][:3]}")
-                    values.append(te_matrix[i, j])
+                    values.append(tm[i, j])
                     colors.append(color_map[i])
-                    idx += 1
-            # Create bar chart
             bg = pg.BarGraphItem(x=np.arange(len(values)), height=values, width=0.7,
                                  brushes=[pg.mkBrush(QColor(c).darker(250)) for c in colors])
             bar_plot.addItem(bg)
@@ -685,46 +658,110 @@ def build_information_flow_page(parent: QWidget) -> QWidget:
             bar_plot.setTitle("Pairwise Transfer Entropy", color=TEXT, size="12pt")
         except Exception:
             bar_plot.setTitle("Could not render bar chart", color=AMBER, size="12pt")
+
+    def _run_te() -> None:
+        if not has_data:
+            return
+        try:
+            lag = s_te_lag.value()
+            bins_val = s_te_bins.value()
+            series_matrix = np.column_stack([_extract_values(data, k) for k in keys]).T
+            te_matrix = np.zeros((4, 4))
+            for i in range(4):
+                for j in range(4):
+                    if i != j:
+                        res = transfer_entropy(series_matrix[j], series_matrix[i], lag=lag, bins=bins_val)
+                        te_matrix[i, j] = res["te"]
+
+            te_rows: list[list[str]] = []
+            for i in range(4):
+                row: list[str] = []
+                for j in range(4):
+                    if i == j:
+                        row.append("—")
+                    else:
+                        val = te_matrix[i, j]
+                        col_vals = [te_matrix[ii, j] for ii in range(4) if ii != j]
+                        is_leader = val == max(col_vals) and val > 0
+                        prefix = "▶ " if is_leader else "  "
+                        row.append(f"{prefix}{val:.4f}")
+                te_rows.append(row)
+            new_te_table = make_table(["Target → Source"] + names, te_rows)
+            for i_te in range(te_lay.count()):
+                w = te_lay.itemAt(i_te).widget()
+                if isinstance(w, QTableWidget):
+                    old_te = w
+                    break
+            else:
+                return
+            te_lay.replaceWidget(old_te, new_te_table)
+            old_te.hide()
+            old_te.setParent(None)
+            old_te.deleteLater()
+
+            te_note = QLabel("▶ marks the strongest information source for each target variable (highest TE in each column).")
+            te_note.setObjectName("panelSubtitle")
+            te_note.setWordWrap(True)
+            te_lay.addWidget(te_note)
+            te_matrix_ref[0] = te_matrix
+            _update_bar()
+        except Exception as exc:
+            te_lay.addWidget(QLabel(f"TE computation error: {exc}"))
+
+    if not has_data:
+        te_lay.addWidget(QLabel("No data loaded. Refresh a country dataset from the top bar to compute transfer entropy."))
+
+    te_lay.addStretch()
+    root.addWidget(te_panel)
+
+    # Initial computation
+    if has_data:
+        # Create a placeholder table for first run
+        _placeholder_te = make_table(["Target → Source"] + names, [["—"] * 5] * 4)
+        te_lay.insertWidget(te_lay.count() - 2, _placeholder_te)  # before addStretch
+        _run_te()
     else:
         bar_plot.setTitle("No data available", color=AMBER, size="12pt")
 
+    btn_te.clicked.connect(_run_te)
+
     # ---- Panel 3: Prospect Theory Value Function ----
-    pt_panel, pt_lay = frame("Prospect Theory Value Function", "Kahneman–Tversky S-shaped value function: v(x) = x^β for gains, v(x) = −λ|x|^α for losses. Note the kink at the origin (loss aversion).")
+    pt_panel, pt_lay = frame("Prospect Theory Value Function", "Kahneman–Tversky S-shaped value function. Adjust α, β and λ to see how risk attitudes shape the value function.")
     pt_plot = _styled_plot(300)
     pt_lay.addWidget(pt_plot, 1)
 
     # Parameter display
-    pt_params = QLabel("α = 0.88  ·  β = 0.88  ·  λ = 2.25")
-    pt_params.setObjectName("panelSubtitle")
-    pt_params.setStyleSheet(f"color: {ACCENT};")
-    pt_lay.addWidget(pt_params)
+    s_pt_alpha, _ = _slider_row("α (loss curvature, x100)", 50, 150, 88, pt_lay, divisor=100)
+    s_pt_beta, _ = _slider_row("β (gain curvature, x100)", 50, 150, 88, pt_lay, divisor=100)
+    s_pt_lam, _ = _slider_row("λ (loss aversion, x100)", 100, 400, 225, pt_lay, divisor=100)
     pt_lay.addStretch()
     root.addWidget(pt_panel)
 
-    try:
-        pt = ProspectTheory(alpha=0.88, beta=0.88, lambda_=2.25)
-        x = np.linspace(-10, 10, 500)
-        v = pt.value_function(x)
-        pt_plot.clear()
-        # Separate gains and losses for coloring
-        mask_gain = x >= 0
-        mask_loss = x < 0
-        pt_plot.plot(x[mask_gain], v[mask_gain], pen=pg.mkPen(ACCENT, width=3), name="Gains")
-        pt_plot.plot(x[mask_loss], v[mask_loss], pen=pg.mkPen(DANGER, width=3), name="Losses")
-        # Reference line at origin
-        pt_plot.addItem(
-            pg.InfiniteLine(pos=0, angle=90, pen=pg.mkPen(MUTED, width=1, style=Qt.PenStyle.DashLine))
-        )
-        pt_plot.addItem(
-            pg.InfiniteLine(pos=0, angle=0, pen=pg.mkPen(MUTED, width=1, style=Qt.PenStyle.DashLine))
-        )
-        # Expected utility line for comparison
-        pt_plot.plot(x, x, pen=pg.mkPen("#555555", width=1, style=Qt.PenStyle.DotLine), name="EU (linear)")
-        pt_plot.setLabel("left", "Subjective value v(x)")
-        pt_plot.setLabel("bottom", "Outcome x")
-        pt_plot.setTitle("Prospect Theory Value Function (loss aversion kink at origin)", color=TEXT, size="12pt")
-    except Exception as exc:
-        pt_plot.setTitle(f"Error: {exc}", color=DANGER, size="12pt")
+    def _update_pt() -> None:
+        try:
+            a = s_pt_alpha.value() / 100
+            b = s_pt_beta.value() / 100
+            lam = s_pt_lam.value() / 100
+            pt = ProspectTheory(alpha=a, beta=b, lambda_=lam)
+            x = np.linspace(-10, 10, 500)
+            v = pt.value_function(x)
+            pt_plot.clear()
+            mask_gain = x >= 0
+            mask_loss = x < 0
+            pt_plot.plot(x[mask_gain], v[mask_gain], pen=pg.mkPen(ACCENT, width=3), name="Gains")
+            pt_plot.plot(x[mask_loss], v[mask_loss], pen=pg.mkPen(DANGER, width=3), name="Losses")
+            pt_plot.addItem(pg.InfiniteLine(pos=0, angle=90, pen=pg.mkPen(MUTED, width=1, style=Qt.PenStyle.DashLine)))
+            pt_plot.addItem(pg.InfiniteLine(pos=0, angle=0, pen=pg.mkPen(MUTED, width=1, style=Qt.PenStyle.DashLine)))
+            pt_plot.plot(x, x, pen=pg.mkPen("#555555", width=1, style=Qt.PenStyle.DotLine), name="EU (linear)")
+            pt_plot.setLabel("left", "Subjective value v(x)")
+            pt_plot.setLabel("bottom", "Outcome x")
+            pt_plot.setTitle(f"Prospect Theory (α={a:.2f}, β={b:.2f}, λ={lam:.2f})", color=TEXT, size="12pt")
+        except Exception as exc:
+            pt_plot.setTitle(f"Error: {exc}", color=DANGER, size="12pt")
+
+    for s in (s_pt_alpha, s_pt_beta, s_pt_lam):
+        s.valueChanged.connect(_update_pt)
+    _update_pt()
 
     root.addStretch()
     return scroll
@@ -751,21 +788,30 @@ def build_time_series_lab_page(parent: QWidget) -> QWidget:
     has_data = all(len(data.get(k, [])) >= 14 for k in keys)
 
     # ---- Panel 1: PCA Factor Extraction ----
-    pca_panel, pca_lay = frame("PCA Factor Extraction", "Principal Component Analysis on macro indicator returns. Extracts dominant drivers of co-movement across GDP, Inflation, Unemployment and Investment.")
+    pca_panel, pca_lay = frame("PCA Factor Extraction", "PCA on macro indicator returns. Adjust variance threshold to control number of extracted factors.")
+    s_pca_var, _ = _slider_row("Variance threshold (% x10)", 50, 99, 90, pca_lay, divisor=10)
+    btn_pca = QPushButton("Run PCA")
+    btn_pca.setObjectName("secondaryButton")
+    pca_lay.addWidget(btn_pca)
     pca_plot = _styled_plot(280)
     pca_lay.addWidget(pca_plot, 1)
-    pca_info = QLabel("Waiting for data…")
+    pca_info = QLabel("Press Run PCA")
     pca_info.setObjectName("panelSubtitle")
     pca_info.setWordWrap(True)
     pca_lay.addWidget(pca_info)
     pca_lay.addStretch()
     root.addWidget(pca_panel)
 
-    if has_data:
+    def _run_pca() -> None:
+        if not has_data:
+            pca_plot.setTitle("Insufficient data — need ≥ 14 observations per indicator", color=AMBER, size="12pt")
+            pca_info.setText("Load a country dataset via the top bar to enable PCA.")
+            return
         try:
+            var_thresh = s_pca_var.value() / 10
             values = np.column_stack([_extract_values(data, k) for k in keys])
             returns = np.diff(values, axis=0) / (np.abs(values[:-1]) + 1e-8)
-            pca = PCAFactorExtractor(n_components=0.90)
+            pca = PCAFactorExtractor(n_components=var_thresh)
             result = pca.fit_transform(returns, asset_names=names)
             n_factors = len(result["factor_names"])
             x = np.arange(returns.shape[0])
@@ -776,21 +822,28 @@ def build_time_series_lab_page(parent: QWidget) -> QWidget:
                               name=f"PC{i+1} ({result['explained_variance_ratio'][i]:.1%})")
             pca_plot.setLabel("left", "Factor value")
             pca_plot.setLabel("bottom", "Period")
-            pca_plot.setTitle(f"PCA Factors — {n_factors} components explain {sum(result['explained_variance_ratio'][:n_factors]):.1%} of variance", color=TEXT, size="12pt")
+            pca_plot.setTitle(f"PCA — {n_factors} factors explain {sum(result['explained_variance_ratio'][:n_factors]):.1%} (threshold={var_thresh:.0%})", color=TEXT, size="12pt")
             ev_text = "  ".join([f"PC{i+1}={result['explained_variance_ratio'][i]:.1%}" for i in range(n_factors)])
             pca_info.setText(f"Explained variance: {ev_text}")
         except Exception as exc:
             pca_plot.setTitle(f"PCA Error: {exc}", color=DANGER, size="12pt")
             pca_info.setText(str(exc))
-    else:
-        pca_plot.setTitle("Insufficient data — need ≥ 14 observations per indicator", color=AMBER, size="12pt")
-        pca_info.setText("Load a country dataset via the top bar to enable PCA.")
+
+    btn_pca.clicked.connect(_run_pca)
+    _run_pca()
 
     # ---- Panel 2: ARIMA Forecast ----
-    arima_panel, arima_lay = frame("ARIMA Forecast (GDP)", "Fit ARIMA(1,1,1) to GDP growth data and produce a 10-step ahead forecast with 95% confidence interval.")
+    arima_panel, arima_lay = frame("ARIMA Forecast (GDP)", "Fit ARIMA to GDP data. Adjust order (p,d,q) and forecast horizon interactively.")
+    s_arima_p, _ = _slider_row("AR order p", 0, 5, 1, arima_lay)
+    s_arima_d, _ = _slider_row("Diff order d", 0, 2, 1, arima_lay)
+    s_arima_q, _ = _slider_row("MA order q", 0, 5, 1, arima_lay)
+    s_arima_fc, _ = _slider_row("Forecast steps", 5, 30, 10, arima_lay)
+    btn_arima = QPushButton("Run ARIMA")
+    btn_arima.setObjectName("secondaryButton")
+    arima_lay.addWidget(btn_arima)
     arima_plot = _styled_plot(280)
     arima_lay.addWidget(arima_plot, 1)
-    arima_info = QLabel("Waiting for data…")
+    arima_info = QLabel("Press Run ARIMA")
     arima_info.setObjectName("panelSubtitle")
     arima_info.setWordWrap(True)
     arima_lay.addWidget(arima_info)
@@ -1104,32 +1157,45 @@ def build_political_climate_page(parent: QWidget) -> QWidget:
 
     # ---- Panel 2: Sanction Impact ----
     sanc_panel, sanc_lay = frame("Sanction GDP Impact Model", "Estimate cumulative GDP loss from sanctions with exponential adaptation.")
+    s_sanc_sev, _ = _slider_row("Sanction severity (x10)", 1, 10, 7, sanc_lay, divisor=10)
+    s_sanc_dur, _ = _slider_row("Duration (years)", 1, 30, 10, sanc_lay)
+    s_sanc_dep, _ = _slider_row("Trade dependency (x10)", 1, 8, 2, sanc_lay, divisor=10)
+    btn_sanc = QPushButton("Run Sanction Model")
+    btn_sanc.setObjectName("secondaryButton")
+    sanc_lay.addWidget(btn_sanc)
     sanc_plot = _styled_plot(260)
     sanc_lay.addWidget(sanc_plot, 1)
-    sanc_info = QLabel("Computing…")
+    sanc_info = QLabel("Press Run Sanction Model")
     sanc_info.setObjectName("panelSubtitle")
     sanc_info.setWordWrap(True)
     sanc_lay.addWidget(sanc_info)
     sanc_lay.addStretch()
     root.addWidget(sanc_panel)
 
-    try:
-        sanc_model = SanctionImpactModel()
-        sanc_res = sanc_model.estimate_gdp_impact(
-            trade_dependency=0.25, sanction_severity=0.7, duration=10, adaptation_rate=0.1,
-        )
-        years = np.arange(len(sanc_res["gdp_loss_path"]))
-        sanc_plot.clear()
-        sanc_plot.plot(years, np.array(sanc_res["gdp_loss_path"]) * 100, pen=pg.mkPen(DANGER, width=2), name="GDP loss (%)")
-        sanc_plot.addLine(y=0, pen=pg.mkPen(MUTED, width=1, style=Qt.PenStyle.DashLine))
-        sanc_plot.setLabel("left", "%")
-        sanc_plot.setLabel("bottom", "Year")
-        sanc_plot.setTitle("Sanction GDP Impact Path", color=TEXT, size="12pt")
-        sanc_info.setText(
-            f"Total GDP loss: {sanc_res['total_loss']:.2%}  ·  Annual avg: {np.mean(sanc_res['gdp_loss_path']):.2%}"
-        )
-    except Exception as exc:
-        sanc_plot.setTitle(f"Sanction error: {exc}", color=DANGER, size="12pt")
+    def _run_sanc() -> None:
+        try:
+            sev = s_sanc_sev.value() / 10
+            dur = s_sanc_dur.value()
+            dep = s_sanc_dep.value() / 10
+            sanc_model = SanctionImpactModel()
+            sanc_res = sanc_model.estimate_gdp_impact(
+                trade_dependency=dep, sanction_severity=sev, duration=dur, adaptation_rate=0.1,
+            )
+            years = np.arange(len(sanc_res["gdp_loss_path"]))
+            sanc_plot.clear()
+            sanc_plot.plot(years, np.array(sanc_res["gdp_loss_path"]) * 100, pen=pg.mkPen(DANGER, width=2), name="GDP loss (%)")
+            sanc_plot.addLine(y=0, pen=pg.mkPen(MUTED, width=1, style=Qt.PenStyle.DashLine))
+            sanc_plot.setLabel("left", "%")
+            sanc_plot.setLabel("bottom", "Year")
+            sanc_plot.setTitle(f"Sanction GDP Impact (sev={sev:.1f}, dur={dur}y, dep={dep:.1f})", color=TEXT, size="12pt")
+            sanc_info.setText(
+                f"Total GDP loss: {sanc_res['total_loss']:.2%}  ·  Annual avg: {np.mean(sanc_res['gdp_loss_path']):.2%}"
+            )
+        except Exception as exc:
+            sanc_plot.setTitle(f"Sanction error: {exc}", color=DANGER, size="12pt")
+
+    btn_sanc.clicked.connect(_run_sanc)
+    _run_sanc()
 
     # ---- Panel 3: Climate VaR ----
     climate_panel, climate_lay = frame("Climate Value-at-Risk", "Physical climate risk VaR under temperature scenarios.")
@@ -1167,27 +1233,45 @@ def build_political_climate_page(parent: QWidget) -> QWidget:
 
     # ---- Panel 4: Hotelling Rule ----
     hotelling_panel, hot_lay = frame("Hotelling Rule — Optimal Resource Extraction", "Hotelling (1931) optimal extraction pricing: net price rises at the rate of interest.")
+    s_hot_price, _ = _slider_row("Initial price", 50, 200, 100, hot_lay)
+    s_hot_cost, _ = _slider_row("Extraction cost", 5, 80, 30, hot_lay)
+    s_hot_disc, _ = _slider_row("Discount rate (x100)", 1, 15, 5, hot_lay, divisor=100)
+    btn_hot = QPushButton("Run Hotelling Model")
+    btn_hot.setObjectName("secondaryButton")
+    hot_lay.addWidget(btn_hot)
     hot_plot = _styled_plot(260)
     hot_lay.addWidget(hot_plot, 1)
     hot_lay.addStretch()
     root.addWidget(hotelling_panel)
 
-    try:
-        hr = HotellingRule()
-        hr_res = hr.optimal_price_path(initial_price=100, extraction_cost=30, discount_rate=0.05, reserves=1000, periods=50)
-        x_hr = np.arange(50)
-        hot_plot.clear()
-        hot_plot.plot(x_hr, hr_res["prices"], pen=pg.mkPen(ACCENT, width=2), name="Price P_t")
-        hot_plot.plot(x_hr, hr_res["net_prices"], pen=pg.mkPen(AMBER, width=2), name="Net price (P-c)")
-        hot_plot.addLine(y=30, pen=pg.mkPen(MUTED, width=1, style=Qt.PenStyle.DashLine), label="Extraction cost")
-        hot_plot.setLabel("left", "Price")
-        hot_plot.setLabel("bottom", "Period")
-        hot_plot.setTitle("Hotelling Optimal Extraction Path", color=TEXT, size="12pt")
-    except Exception as exc:
-        hot_plot.setTitle(f"Hotelling error: {exc}", color=DANGER, size="12pt")
+    def _run_hot() -> None:
+        try:
+            p0 = s_hot_price.value()
+            c = s_hot_cost.value()
+            r = s_hot_disc.value()
+            hr = HotellingRule()
+            hr_res = hr.optimal_price_path(initial_price=p0, extraction_cost=c, discount_rate=r, reserves=1000, periods=50)
+            x_hr = np.arange(50)
+            hot_plot.clear()
+            hot_plot.plot(x_hr, hr_res["prices"], pen=pg.mkPen(ACCENT, width=2), name="Price P_t")
+            hot_plot.plot(x_hr, hr_res["net_prices"], pen=pg.mkPen(AMBER, width=2), name="Net price (P-c)")
+            hot_plot.addLine(y=c, pen=pg.mkPen(MUTED, width=1, style=Qt.PenStyle.DashLine), label="Extraction cost")
+            hot_plot.setLabel("left", "Price")
+            hot_plot.setLabel("bottom", "Period")
+            hot_plot.setTitle(f"Hotelling Path (P0={p0}, c={c}, r={r:.2f})", color=TEXT, size="12pt")
+        except Exception as exc:
+            hot_plot.setTitle(f"Hotelling error: {exc}", color=DANGER, size="12pt")
+
+    btn_hot.clicked.connect(_run_hot)
+    _run_hot()
 
     # ---- Panel 5: Innovation S-Curve ----
     bass_panel, bass_lay = frame("Bass Innovation Diffusion S-Curve", "Bass (1969) diffusion model: new adopters = (p + q*F(t))(1 - F(t)).")
+    s_bass_p, _ = _slider_row("Innovation p (x100)", 1, 10, 3, bass_lay, divisor=100)
+    s_bass_q, _ = _slider_row("Imitation q (x100)", 10, 80, 38, bass_lay, divisor=100)
+    btn_bass = QPushButton("Run Bass Model")
+    btn_bass.setObjectName("secondaryButton")
+    bass_lay.addWidget(btn_bass)
     bass_plot = _styled_plot(260)
     bass_lay.addWidget(bass_plot, 1)
     bass_info = QLabel("")
@@ -1197,19 +1281,25 @@ def build_political_climate_page(parent: QWidget) -> QWidget:
     bass_lay.addStretch()
     root.addWidget(bass_panel)
 
-    try:
-        isc = InnovationSCurve()
-        bass_res = isc.adoption_curve(market_size=1000, innovation_coefficient=0.03, imitation_coefficient=0.38, periods=50)
-        x_bass = np.arange(50)
-        bass_plot.clear()
-        bass_plot.plot(x_bass, bass_res["cumulative_adopters"], pen=pg.mkPen(ACCENT, width=2), name="Cumulative adopters")
-        bass_plot.plot(x_bass, np.array(bass_res["new_adopters"]) * 10, pen=pg.mkPen(AMBER, width=2), name="New adopters (x10)")
-        bass_plot.setLabel("left", "Count")
-        bass_plot.setLabel("bottom", "Period")
-        bass_plot.setTitle("Bass Diffusion S-Curve", color=TEXT, size="12pt")
-        bass_info.setText(f"Peak adoption at period {bass_res['peak_period']}  ·  p=0.03  q=0.38")
-    except Exception as exc:
-        bass_plot.setTitle(f"Bass error: {exc}", color=DANGER, size="12pt")
+    def _run_bass() -> None:
+        try:
+            p = s_bass_p.value() / 100
+            q = s_bass_q.value() / 100
+            isc = InnovationSCurve()
+            bass_res = isc.adoption_curve(market_size=1000, innovation_coefficient=p, imitation_coefficient=q, periods=50)
+            x_bass = np.arange(50)
+            bass_plot.clear()
+            bass_plot.plot(x_bass, bass_res["cumulative_adopters"], pen=pg.mkPen(ACCENT, width=2), name="Cumulative adopters")
+            bass_plot.plot(x_bass, np.array(bass_res["new_adopters"]) * 10, pen=pg.mkPen(AMBER, width=2), name="New adopters (x10)")
+            bass_plot.setLabel("left", "Count")
+            bass_plot.setLabel("bottom", "Period")
+            bass_plot.setTitle(f"Bass Diffusion (p={p:.2f}, q={q:.2f})", color=TEXT, size="12pt")
+            bass_info.setText(f"Peak adoption at period {bass_res['peak_period']}  ·  p={p:.2f}  q={q:.2f}")
+        except Exception as exc:
+            bass_plot.setTitle(f"Bass error: {exc}", color=DANGER, size="12pt")
+
+    btn_bass.clicked.connect(_run_bass)
+    _run_bass()
 
     root.addStretch()
     return scroll
@@ -2146,7 +2236,12 @@ def build_advanced_markets_page(parent: QWidget) -> QWidget:
         hw_plot.setTitle(f"HW Error: {exc}", color=DANGER, size="12pt")
 
     # ---- Panel 5: Trade-Off Theory ----
-    to_panel, to_lay = frame("Trade-Off Theory of Capital Structure", "Optimal debt level balances tax shield benefit against bankruptcy cost.")
+    to_panel, to_lay = frame("Trade-Off Theory of Capital Structure", "Optimal debt level balances tax shield vs bankruptcy cost. Adjust parameters interactively.")
+    s_to_beta, _ = _slider_row("Bankruptcy cost β (x10)", 10, 80, 30, to_lay, divisor=10)
+    s_to_tax, _ = _slider_row("Tax rate T_c (x100)", 10, 40, 25, to_lay, divisor=100)
+    btn_to = QPushButton("Run Trade-Off")
+    btn_to.setObjectName("secondaryButton")
+    to_lay.addWidget(btn_to)
     to_plot = _styled_plot(260)
     to_lay.addWidget(to_plot, 1)
     to_info = QLabel("")
@@ -2156,22 +2251,28 @@ def build_advanced_markets_page(parent: QWidget) -> QWidget:
     to_lay.addStretch()
     root.addWidget(to_panel)
 
-    try:
-        to = TradeOffTheory(V_unlevered=1000, T_c=0.25, bankruptcy_alpha=50, bankruptcy_beta=3.0)
-        opt = to.optimal_debt()
-        frontier = to.frontier_curve(n_points=150)
-        to_plot.clear()
-        to_plot.plot(frontier["debt"], frontier["firm_value"], pen=pg.mkPen(ACCENT, width=2), name="V(D)")
-        to_plot.plot(frontier["debt"], frontier["tax_benefit"], pen=pg.mkPen(BLUE, width=1.5), name="Tax benefit")
-        to_plot.plot(frontier["debt"], frontier["bankruptcy_cost"], pen=pg.mkPen(DANGER, width=1.5), name="Bankruptcy cost")
-        to_plot.addItem(pg.InfiniteLine(pos=opt["optimal_debt_numerical"], angle=90,
-                                         pen=pg.mkPen(AMBER, width=1.5, style=Qt.PenStyle.DashLine)))
-        to_plot.setLabel("left", "Value")
-        to_plot.setLabel("bottom", "Debt D")
-        to_plot.setTitle(f"Trade-Off — Optimal D* = {opt['optimal_debt_numerical']:.0f}", color=TEXT, size="12pt")
-        to_info.setText(f"Max firm value: {opt['firm_value_optimal']:.1f}  |  Leverage: {opt['leverage_ratio']:.1%}")
-    except Exception as exc:
-        to_plot.setTitle(f"Trade-off Error: {exc}", color=DANGER, size="12pt")
+    def _run_to() -> None:
+        try:
+            bb = s_to_beta.value() / 10
+            tc = s_to_tax.value() / 100
+            to = TradeOffTheory(V_unlevered=1000, T_c=tc, bankruptcy_alpha=50, bankruptcy_beta=bb)
+            opt = to.optimal_debt()
+            frontier = to.frontier_curve(n_points=150)
+            to_plot.clear()
+            to_plot.plot(frontier["debt"], frontier["firm_value"], pen=pg.mkPen(ACCENT, width=2), name="V(D)")
+            to_plot.plot(frontier["debt"], frontier["tax_benefit"], pen=pg.mkPen(BLUE, width=1.5), name="Tax benefit")
+            to_plot.plot(frontier["debt"], frontier["bankruptcy_cost"], pen=pg.mkPen(DANGER, width=1.5), name="Bankruptcy cost")
+            to_plot.addItem(pg.InfiniteLine(pos=opt["optimal_debt_numerical"], angle=90,
+                                             pen=pg.mkPen(AMBER, width=1.5, style=Qt.PenStyle.DashLine)))
+            to_plot.setLabel("left", "Value")
+            to_plot.setLabel("bottom", "Debt D")
+            to_plot.setTitle(f"Trade-Off — D* = {opt['optimal_debt_numerical']:.0f} (β={bb:.1f}, T_c={tc:.0%})", color=TEXT, size="12pt")
+            to_info.setText(f"Max value: {opt['firm_value_optimal']:.1f}  |  Leverage: {opt['leverage_ratio']:.1%}")
+        except Exception as exc:
+            to_plot.setTitle(f"Trade-off Error: {exc}", color=DANGER, size="12pt")
+
+    btn_to.clicked.connect(_run_to)
+    _run_to()
 
     # ---- Panel 6: Pecking Order ----
     po_panel, po_lay = frame("Pecking Order Theory Simulation", "Firms prefer internal financing, then debt, then equity. Simulates 20-year capital structure evolution.")
@@ -2196,28 +2297,38 @@ def build_advanced_markets_page(parent: QWidget) -> QWidget:
         po_plot.setTitle(f"Pecking Order Error: {exc}", color=DANGER, size="12pt")
 
     # ---- Panel 7: Mechanism Design Analyzer ----
-    md_panel, md_lay = frame("Mechanism Design — Winner's Curse & Revenue Equivalence", "Analyse auction mechanism properties: allocative efficiency, revenue equivalence and winner's curse bid shading.")
-    md_info = QLabel("Computing…")
+    md_panel, md_lay = frame("Mechanism Design — Winner's Curse & Revenue Equivalence", "Adjust number of bidders and value uncertainty to analyse winner's curse severity and bid shading.")
+    s_md_bidders, _ = _slider_row("Number of bidders", 2, 20, 5, md_lay)
+    s_md_vstd, _ = _slider_row("Value std deviation", 5, 50, 15, md_lay)
+    btn_md = QPushButton("Run Mechanism Design")
+    btn_md.setObjectName("secondaryButton")
+    md_lay.addWidget(btn_md)
+    md_info = QLabel("Press Run…")
     md_info.setObjectName("panelSubtitle")
     md_info.setWordWrap(True)
     md_lay.addWidget(md_info)
     md_lay.addStretch()
     root.addWidget(md_panel)
 
-    try:
-        # Revenue equivalence check using same bids from auction panel
-        bids_md = {"Alice": 95, "Bob": 82, "Carol": 78, "Dave": 71, "Eve": 65}
-        a_vick = AuctionMechanism(mechanism="vickrey").run(bids_md, reserve_price=60)
-        a_fp = AuctionMechanism(mechanism="first_price").run(bids_md, reserve_price=60)
-        re_check = MechanismDesignAnalyzer.revenue_equivalence_check(a_vick, a_fp)
-        wc = MechanismDesignAnalyzer.winner_curse_bid_adjustment(n_bidders=5, value_std=15, seed=42)
-        md_info.setText(
-            f"Revenue Equivalence: Vickrey={a_vick.revenue:.0f} vs First-Price={a_fp.revenue:.0f} (diff {re_check['pct_difference']:.1f}%)  |  "
-            f"Winner's Curse (5 bidders, sigma=15): avg overpayment={wc['average_overpayment']:.2f}, "
-            f"severity={wc['winner_curse_severity']:.3f}, shade factor={wc['optimal_bid_shading_fraction']:.4f}"
-        )
-    except Exception as exc:
-        md_info.setText(f"Mechanism Design Error: {exc}")
+    def _run_md() -> None:
+        try:
+            nb = s_md_bidders.value()
+            vs = s_md_vstd.value()
+            bids_md = {"Alice": 95, "Bob": 82, "Carol": 78, "Dave": 71, "Eve": 65}
+            a_vick = AuctionMechanism(mechanism="vickrey").run(bids_md, reserve_price=60)
+            a_fp = AuctionMechanism(mechanism="first_price").run(bids_md, reserve_price=60)
+            re_check = MechanismDesignAnalyzer.revenue_equivalence_check(a_vick, a_fp)
+            wc = MechanismDesignAnalyzer.winner_curse_bid_adjustment(n_bidders=nb, value_std=vs, seed=42)
+            md_info.setText(
+                f"Revenue Equiv: Vickrey={a_vick.revenue:.0f} vs FP={a_fp.revenue:.0f} (diff {re_check['pct_difference']:.1f}%)  |  "
+                f"Winner's Curse ({nb} bidders, σ={vs}): overpayment={wc['average_overpayment']:.2f}, "
+                f"severity={wc['winner_curse_severity']:.3f}, shade={wc['optimal_bid_shading_fraction']:.4f}"
+            )
+        except Exception as exc:
+            md_info.setText(f"Mechanism Design Error: {exc}")
+
+    btn_md.clicked.connect(_run_md)
+    _run_md()
 
     root.addStretch()
     return scroll
@@ -2273,34 +2384,50 @@ def build_compliance_suite_page(parent: QWidget) -> QWidget:
 
     # ---- Panel 2: Dodd-Frank ----
     df_panel, df_lay = frame("Dodd-Frank Compliance", "Volcker rule check, derivative clearing requirements and stress scenario analysis.")
-    df_info = QLabel("Computing…")
+    s_df_rev, _ = _slider_row("Trading revenue ($M)", 10, 200, 45, df_lay)
+    s_df_total, _ = _slider_row("Total revenue ($M)", 50, 500, 200, df_lay)
+    btn_df = QPushButton("Run Dodd-Frank Check")
+    btn_df.setObjectName("secondaryButton")
+    df_lay.addWidget(btn_df)
+    df_info = QLabel("Press Run…")
     df_info.setObjectName("metricValue")
     df_info.setWordWrap(True)
     df_lay.addWidget(df_info)
     df_lay.addStretch()
     root.addWidget(df_panel)
 
-    try:
-        dfa = DoddFrankAnalyzer()
-        volcker = dfa.volcker_rule_check(trading_revenue=45, total_revenue=200,
-                                          proprietary_positions=500, allowed_activities_revenue=10)
-        deriv = dfa.derivative_clearing_check(otc_notional=12e9, cleared_notional=5e9)
-        stress = dfa.stress_scenario(
-            portfolio_value=1000,
-            shocks={"equity": -0.20, "credit": -0.10, "rates": +0.15},
-            correlations={"equity_credit": 0.6},
-        )
-        df_info.setText(
-            f"Volcker Rule: Trading revenue = {volcker['trading_revenue_pct']:.1%} of total | Review needed: {volcker['needs_review']}  |  "
-            f"Derivative Clearing: {deriv['clearing_percentage']:.1%} cleared | Above threshold: {deriv['above_threshold']} | Mandatory: {deriv['needs_mandatory_clearing']}  |  "
-            f"Stress Test: Loss = {stress['loss_pct']:.1%} | Capital adequate: {stress['capital_adequate']}"
-        )
-        df_info.setStyleSheet(f"color: {ACCENT if stress['capital_adequate'] and not volcker['needs_review'] else DANGER};")
-    except Exception as exc:
-        df_info.setText(f"Dodd-Frank Error: {exc}")
+    def _run_df() -> None:
+        try:
+            rev = s_df_rev.value()
+            tot = s_df_total.value()
+            dfa = DoddFrankAnalyzer()
+            volcker = dfa.volcker_rule_check(trading_revenue=rev, total_revenue=tot,
+                                              proprietary_positions=500, allowed_activities_revenue=10)
+            deriv = dfa.derivative_clearing_check(otc_notional=12e9, cleared_notional=5e9)
+            stress = dfa.stress_scenario(
+                portfolio_value=1000,
+                shocks={"equity": -0.20, "credit": -0.10, "rates": +0.15},
+                correlations={"equity_credit": 0.6},
+            )
+            df_info.setText(
+                f"Volcker: Trading = {volcker['trading_revenue_pct']:.1%} of total | Review: {volcker['needs_review']}  |  "
+                f"Clearing: {deriv['clearing_percentage']:.1%} cleared | Mandatory: {deriv['needs_mandatory_clearing']}  |  "
+                f"Stress: Loss = {stress['loss_pct']:.1%} | Capital OK: {stress['capital_adequate']}"
+            )
+            df_info.setStyleSheet(f"color: {ACCENT if stress['capital_adequate'] and not volcker['needs_review'] else DANGER};")
+        except Exception as exc:
+            df_info.setText(f"Dodd-Frank Error: {exc}")
+
+    btn_df.clicked.connect(_run_df)
+    _run_df()
 
     # ---- Panel 3: Event Study ----
-    es_panel, es_lay = frame("Event Study — Semi-Strong EMH", "Measure abnormal returns around a corporate event using single-index market model.")
+    es_panel, es_lay = frame("Event Study — Semi-Strong EMH", "Measure abnormal returns around a corporate event. Adjust event timing and effect size.")
+    s_es_day, _ = _slider_row("Event day", 200, 290, 250, es_lay)
+    s_es_effect, _ = _slider_row("Abnormal return effect (% x10)", 10, 100, 40, es_lay, divisor=10)
+    btn_es = QPushButton("Run Event Study")
+    btn_es.setObjectName("secondaryButton")
+    es_lay.addWidget(btn_es)
     es_plot = _styled_plot(280)
     es_lay.addWidget(es_plot, 1)
     es_info = QLabel("")
@@ -2310,34 +2437,38 @@ def build_compliance_suite_page(parent: QWidget) -> QWidget:
     es_lay.addStretch()
     root.addWidget(es_panel)
 
-    try:
-        np.random.seed(55)
-        n_days = 300
-        market_rets = np.random.normal(0.0005, 0.01, n_days)
-        beta_true = 1.2
-        asset_rets = 0.0003 + beta_true * market_rets + np.random.normal(0, 0.008, n_days)
-        # Inject event effect at day 250
-        event_day = 250
-        asset_rets[event_day] += 0.04  # +4% abnormal return
-        es = EventStudy(asset_rets, market_rets, event_date=event_day,
-                        estimation_window=(-240, -11), event_window=(-5, 5))
-        mm = es.estimate_market_model()
-        ar_res = es.compute_abnormal_returns()
-        es_plot.clear()
-        days = ar_res["event_days"]
-        es_plot.plot(days, ar_res["cumulative_abnormal_returns"], pen=pg.mkPen(ACCENT, width=2), name="CAR")
-        es_plot.addLine(y=0, pen=pg.mkPen(MUTED, width=1, style=Qt.PenStyle.DashLine))
-        es_plot.addItem(pg.InfiniteLine(pos=0, angle=90, pen=pg.mkPen(AMBER, width=1.5, style=Qt.PenStyle.DotLine)))
-        es_plot.setLabel("left", "CAR")
-        es_plot.setLabel("bottom", "Event day")
-        es_plot.setTitle(f"Event Study — CAR = {ar_res['total_CAR']:.4f} (beta={mm['beta']:.3f}, R2={mm['r_squared']:.3f})", color=TEXT, size="12pt")
-        es_info.setText(
-            f"Model: alpha={mm['alpha']:.6f}, beta={mm['beta']:.3f}, R2={mm['r_squared']:.3f}  |  "
-            f"Total CAR: {ar_res['total_CAR']:.4f}  |  Event day: {event_day}"
-        )
-    except Exception as exc:
-        es_plot.setTitle(f"Event Study Error: {exc}", color=DANGER, size="12pt")
-        es_info.setText(str(exc))
+    def _run_es() -> None:
+        try:
+            np.random.seed(55)
+            n_days = 300
+            event_day = s_es_day.value()
+            effect = s_es_effect.value() / 10
+            market_rets = np.random.normal(0.0005, 0.01, n_days)
+            beta_true = 1.2
+            asset_rets = 0.0003 + beta_true * market_rets + np.random.normal(0, 0.008, n_days)
+            asset_rets[event_day] += effect
+            es = EventStudy(asset_rets, market_rets, event_date=event_day,
+                            estimation_window=(-240, -11), event_window=(-5, 5))
+            mm = es.estimate_market_model()
+            ar_res = es.compute_abnormal_returns()
+            es_plot.clear()
+            days = ar_res["event_days"]
+            es_plot.plot(days, ar_res["cumulative_abnormal_returns"], pen=pg.mkPen(ACCENT, width=2), name="CAR")
+            es_plot.addLine(y=0, pen=pg.mkPen(MUTED, width=1, style=Qt.PenStyle.DashLine))
+            es_plot.addItem(pg.InfiniteLine(pos=0, angle=90, pen=pg.mkPen(AMBER, width=1.5, style=Qt.PenStyle.DotLine)))
+            es_plot.setLabel("left", "CAR")
+            es_plot.setLabel("bottom", "Event day")
+            es_plot.setTitle(f"Event Study — CAR={ar_res['total_CAR']:.4f} (day={event_day}, effect={effect:.1%})", color=TEXT, size="12pt")
+            es_info.setText(
+                f"Model: alpha={mm['alpha']:.6f}, beta={mm['beta']:.3f}, R2={mm['r_squared']:.3f}  |  "
+                f"Total CAR: {ar_res['total_CAR']:.4f}  |  Event day: {event_day}"
+            )
+        except Exception as exc:
+            es_plot.setTitle(f"Event Study Error: {exc}", color=DANGER, size="12pt")
+            es_info.setText(str(exc))
+
+    btn_es.clicked.connect(_run_es)
+    _run_es()
 
     root.addStretch()
     return scroll
