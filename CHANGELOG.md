@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.4.0 — Unit Tests & CSV Export
+
+### Added
+
+- **82 unit tests** covering all 21 quant_engine modules (previously 0 unit tests).
+  - `tests/test_quant_batch1.py`: 36 tests for macro_models, garch, black_litterman, transfer_entropy, behavioral_finance, political_risk, anomaly_detection, market_microstructure, capital_structure, epidemiological_economics.
+  - `tests/test_quant_batch2.py`: 46 tests for interest_rate_models, pca_factors, market_efficiency, regulatory_framework, time_series_advanced, causal_inference, fuzzy_advanced, fuzzy_credit, contagion_network, climate_risk, monte_carlo_risk.
+- **CSV Export buttons** on 9 table/data panels: Monte Carlo, Black-Litterman, Basel III, EMH Tests, Transfer Entropy, ICRG Political Risk, Auction Mechanisms, Fuzzy AHP, Fuzzy TOPSIS.
+- **`_export_csv_btn()` helper**: generic reusable export function supporting tables (list of rows), dicts (key-value or columnar), and 2D numpy arrays.
+
+### Changed
+
+- Added `QFileDialog`, `csv`, `os` imports to `quant_pages.py`.
+- Test coverage: **0 → 82 tests**, all passing in ~5 seconds.
+
 ## 2.3.0 — Interactive Controls Upgrade (All 12 Quant Pages)
 
 ### Added

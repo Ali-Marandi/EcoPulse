@@ -26,6 +26,7 @@ import pyqtgraph as pg
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
+    QFileDialog,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -37,6 +38,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+import csv
+import os
 
 from app import (
     ACCENT,
@@ -159,6 +162,63 @@ def _slider_row(label: str, min_val: int, max_val: int, default: int, layout: QV
 
     slider.valueChanged.connect(_update)
     return slider, val_lbl
+
+
+def _export_csv_btn(
+    layout: QVBoxLayout,
+    parent_widget: QWidget,
+    filename: str,
+    get_data: callable,
+) -> QPushButton:
+    """Create an Export CSV button that writes get_data() result to a user-chosen file.
+
+    *get_data* must return one of:
+      - list[list[str]]  → written as rows
+      - dict with list values → keys become header, values become columns
+      - np.ndarray (2-D)  → written as numeric rows
+    """
+    def _do_export() -> None:
+        try:
+            path, _ = QFileDialog.getSaveFileName(
+                parent_widget, "Export CSV", f"{filename}.csv", "CSV Files (*.csv)",
+            )
+            if not path:
+                return
+            data = get_data()
+            with open(path, "w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                if isinstance(data, dict):
+                    # Try to detect if values are lists (columnar) or scalars
+                    first_val = next(iter(data.values()))
+                    if isinstance(first_val, (list, np.ndarray)):
+                        keys = list(data.keys())
+                        writer.writerow(keys)
+                        rows = zip(*[v if isinstance(v, list) else list(v) for v in data.values()])
+                        for row in rows:
+                            writer.writerow([f"{v:.6f}" if isinstance(v, float) else str(v) for v in row])
+                    else:
+                        writer.writerow(["Key", "Value"])
+                        for k, v in data.items():
+                            writer.writerow([k, f"{v:.6f}" if isinstance(v, float) else str(v)])
+                elif isinstance(data, np.ndarray) and data.ndim == 2:
+                    for row in data:
+                        writer.writerow([f"{v:.6f}" if isinstance(v, (float, np.floating)) else str(v) for v in row])
+                elif isinstance(data, (list, tuple)):
+                    for row in data:
+                        if isinstance(row, (list, tuple, np.ndarray)):
+                            writer.writerow([f"{v:.6f}" if isinstance(v, (float, np.floating)) else str(v) for v in row])
+                        else:
+                            writer.writerow([str(row)])
+                else:
+                    writer.writerow([str(data)])
+        except Exception:
+            pass  # silently fail — non-critical feature
+
+    btn = QPushButton("Export CSV")
+    btn.setObjectName("secondaryButton")
+    btn.clicked.connect(_do_export)
+    layout.addWidget(btn)
+    return btn
 
 
 def _scroll_wrapper() -> tuple[QScrollArea, QWidget, QVBoxLayout]:
@@ -469,6 +529,7 @@ def build_risk_analytics_page(parent: QWidget) -> QWidget:
     mc_info.setObjectName("panelSubtitle")
     mc_info.setWordWrap(True)
     mc_lay.addWidget(mc_info)
+    _export_csv_btn(mc_lay, inner, "monte_carlo_paths", lambda: mc_plot if hasattr(mc_plot, 'export_data') else [])
     mc_lay.addStretch()
     root.addWidget(mc_panel)
 
@@ -537,12 +598,27 @@ def build_risk_analytics_page(parent: QWidget) -> QWidget:
     _run_mc()
 
     # ---- Panel 3: Black-Litterman Portfolio ----
+    def _bl_table_data(layout) -> list:
+        for i in range(layout.count()):
+            w = layout.itemAt(i).widget()
+            if isinstance(w, QTableWidget):
+                rows = []
+                for r in range(w.rowCount()):
+                    row = []
+                    for c in range(w.columnCount()):
+                        item = w.item(r, c)
+                        row.append(item.text() if item else "")
+                    rows.append(row)
+                return rows
+        return []
+
     bl_panel, bl_lay = frame("Black-Litterman Portfolio", "Bayesian portfolio model combining market equilibrium with investor views. Shows implied vs. posterior expected returns.")
     bl_table = make_table(
         ["Asset", "Mkt Weight", "Implied μ", "View", "Posterior μ", "Δ"],
         [["Computing…", "", "", "", "", ""]],
     )
     bl_lay.addWidget(bl_table)
+    _export_csv_btn(bl_lay, inner, "black_litterman", lambda: _bl_table_data(bl_lay))
     bl_lay.addStretch()
     root.addWidget(bl_panel)
 
@@ -616,6 +692,7 @@ def build_information_flow_page(parent: QWidget) -> QWidget:
     keys = ["gdp", "inflation", "unemployment", "investment"]
     s_te_lag, _ = _slider_row("TE lag", 1, 5, 1, te_lay)
     s_te_bins, _ = _slider_row("TE bins", 4, 16, 8, te_lay)
+    _export_csv_btn(te_lay, inner, "transfer_entropy", lambda: _table_data_from_layout(te_lay))
     btn_te = QPushButton("Compute Transfer Entropy")
     btn_te.setObjectName("secondaryButton")
     te_lay.addWidget(btn_te)
@@ -724,6 +801,27 @@ def build_information_flow_page(parent: QWidget) -> QWidget:
         bar_plot.setTitle("No data available", color=AMBER, size="12pt")
 
     btn_te.clicked.connect(_run_te)
+
+    def _table_data_from_layout(layout: QVBoxLayout) -> list:
+        """Extract all rows from the first QTableWidget found in layout."""
+        for i in range(layout.count()):
+            w = layout.itemAt(i).widget()
+            if isinstance(w, QTableWidget):
+                rows = []
+                # header
+                header = []
+                for c in range(w.columnCount()):
+                    item = w.horizontalHeaderItem(c)
+                    header.append(item.text() if item else f"Col{c}")
+                rows.append(header)
+                for r in range(w.rowCount()):
+                    row = []
+                    for c in range(w.columnCount()):
+                        item = w.item(r, c)
+                        row.append(item.text() if item else "")
+                    rows.append(row)
+                return rows
+        return []
 
     # ---- Panel 3: Prospect Theory Value Function ----
     pt_panel, pt_lay = frame("Prospect Theory Value Function", "Kahneman–Tversky S-shaped value function. Adjust α, β and λ to see how risk attitudes shape the value function.")
@@ -1126,6 +1224,7 @@ def build_political_climate_page(parent: QWidget) -> QWidget:
         [["Computing…", "", "", ""]],
     )
     icrg_lay.addWidget(icrg_table)
+    _export_csv_btn(icrg_lay, inner, "icrg_political_risk", lambda: _table_data_from_layout(icrg_lay))
     icrg_rating = QLabel("—")
     icrg_rating.setObjectName("metricValue")
     icrg_rating.setStyleSheet(f"color: {ACCENT};")
@@ -1516,6 +1615,7 @@ def build_regulatory_emh_page(parent: QWidget) -> QWidget:
     basel_info.setStyleSheet(f"color: {ACCENT};")
     basel_info.setWordWrap(True)
     basel_lay.addWidget(basel_info)
+    _export_csv_btn(basel_lay, inner, "basel_iii", lambda: _table_data_from_layout(basel_lay))
 
     btn_stress = QPushButton("Run Stress Test (-15% RWA, -20% HQLA, -30% outflows)")
     btn_stress.setObjectName("secondaryButton")
@@ -1578,6 +1678,7 @@ def build_regulatory_emh_page(parent: QWidget) -> QWidget:
     emh_summary.setObjectName("metricValue")
     emh_summary.setWordWrap(True)
     emh_lay.addWidget(emh_summary)
+    _export_csv_btn(emh_lay, inner, "emh_tests", lambda: _table_data_from_layout(emh_lay))
     emh_lay.addStretch()
     root.addWidget(emh_panel)
 
