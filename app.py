@@ -18,6 +18,9 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from PySide6.QtGui import QKeySequence, QShortcut, QAction
+from PySide6.QtCore import QLocale, QTranslator
+
 from typing import Any
 
 import pyqtgraph as pg
@@ -62,7 +65,7 @@ from quant_pages import (
 )
 
 APP_NAME = "EcoPulse"
-APP_VERSION = "2.4.0"
+APP_VERSION = "2.5.0"
 ACCENT = "#54E1B6"
 ACCENT_DARK = "#1BBE91"
 BLUE = "#67A7FF"
@@ -74,6 +77,18 @@ CANVAS = "#09111F"
 MUTED = "#8493AA"
 TEXT = "#EAF1FF"
 
+
+# Light theme colors
+LIGHT_BG = "#F5F7FA"
+LIGHT_SURFACE = "#FFFFFF"
+LIGHT_CANVAS = "#EEF1F5"
+LIGHT_TEXT = "#1A2332"
+LIGHT_MUTED = "#6B7B8D"
+LIGHT_SIDEBAR = "#FFFFFF"
+LIGHT_BORDER = "#D8DEE6"
+LIGHT_ACCENT = "#0D9668"
+LIGHT_ACCENT_DARK = "#0B7A54"
+
 COUNTRIES = {
     "United States": "USA",
     "Germany": "DEU",
@@ -81,6 +96,56 @@ COUNTRIES = {
     "Japan": "JPN",
     "Iran": "IRN",
 }
+
+
+TRANSLATIONS = {
+    "en": {
+        "app_name": "ECOPULSE", "app_sub": "ECONOMIC INTELLIGENCE",
+        "command_center": "Command Center", "intelligence_desk": "Intelligence Desk",
+        "scenario_studio": "Scenario Studio", "workspace": "Workspace",
+        "data_sources": "Data Sources", "settings": "Settings",
+        "macro_simulator": "Macro Simulator", "risk_analytics": "Risk Analytics",
+        "information_flow": "Information Flow", "time_series_lab": "Time Series Lab",
+        "network_anomaly": "Network & Anomaly", "political_climate": "Political & Climate",
+        "markets_pricing": "Markets & Pricing", "regulatory_emh": "Regulatory & EMH",
+        "causal_epidemic": "Causal & Epidemic", "fuzzy_decision": "Fuzzy Decision Lab",
+        "advanced_markets": "Advanced Markets", "compliance_suite": "Compliance Suite",
+        "refresh_data": "Refresh data", "export_csv": "Export CSV",
+        "export_image": "Export Image", "import_csv": "Import CSV",
+        "theme_dark": "Dark Theme", "theme_light": "Light Theme",
+        "local_enterprise": "LOCAL ENTERPRISE WORKSPACE",
+        "local_status": "Private data cache enabled",
+        "source_check": "  SOURCE CHECK PENDING  ",
+        "sources_ready": "  SOURCES READY  ",
+        "refreshing": "  REFRESHING VERIFIED SOURCES  ",
+    },
+    "fa": {
+        "app_name": "اکوپالس", "app_sub": "هوش اقتصادی",
+        "command_center": "مرکز فرماندهی", "intelligence_desk": "میز هوش",
+        "scenario_studio": "استودیوی سناریو", "workspace": "فضای کار",
+        "data_sources": "منابع داده", "settings": "تنظیمات",
+        "macro_simulator": "شبیه‌ساز کلان", "risk_analytics": "تحلیل ریسک",
+        "information_flow": "جریان اطلاعات", "time_series_lab": "آزمایشگاه سری زمانی",
+        "network_anomaly": "شبکه و ناهنجاری", "political_climate": "سیاست و اقلیم",
+        "markets_pricing": "بازارها و قیمت‌گذاری", "regulatory_emh": "نظارتی و EMH",
+        "causal_epidemic": "علّی و اپیدمی", "fuzzy_decision": "آزمایشگاه فازی",
+        "advanced_markets": "بازارهای پیشرفته", "compliance_suite": "مجموعه انطباق",
+        "refresh_data": "بازخوانی داده‌ها", "export_csv": "خروجی CSV",
+        "export_image": "خروجی تصویر", "import_csv": "ورود CSV",
+        "theme_dark": "تم تاریک", "theme_light": "تم روشن",
+        "local_enterprise": "فضای کاری محلی",
+        "local_status": "کش داده محلی فعال",
+        "source_check": "  در انتظار بررسی منبع  ",
+        "sources_ready": "  منابع آماده  ",
+        "refreshing": "  در حال بازخوانی  ",
+    },
+}
+
+
+def tr(key: str) -> str:
+    """Return translated string for the current language."""
+    lang = getattr(tr, "_lang", "en")
+    return TRANSLATIONS.get(lang, TRANSLATIONS["en"]).get(key, TRANSLATIONS["en"].get(key, key))
 
 INDICATORS = {
     "gdp": ("GDP growth", "NY.GDP.MKTP.KD.ZG", "%", BLUE),
@@ -387,8 +452,193 @@ class MainWindow(QMainWindow):
         self.data_health: dict[str, dict[str, Any]] = {}
         self.alert_hits: list[str] = []
         self.worker_thread: QThread | None = None
+        self._theme: str = "dark"
+        self._lang: str = "en"
+        self._imported_data: dict[str, np.ndarray] | None = None
         self._build_window()
         self._load_country()
+
+
+    def _apply_theme(self) -> None:
+        """Apply the active theme (dark or light) to the entire window."""
+        if self._theme == "light":
+            self.setStyleSheet(LIGHT_STYLESHEET)
+            pg.setConfigOptions(background=LIGHT_CANVAS, foreground=LIGHT_TEXT)
+            # Update main dashboard plot
+            if hasattr(self, "plot"):
+                self.plot.setBackground(LIGHT_CANVAS)
+                self.plot.getAxis("left").setTextPen(pg.mkPen(LIGHT_MUTED))
+                self.plot.getAxis("bottom").setTextPen(pg.mkPen(LIGHT_MUTED))
+                self.plot.getAxis("left").setPen(pg.mkPen(LIGHT_BORDER))
+                self.plot.getAxis("bottom").setPen(pg.mkPen(LIGHT_BORDER))
+        else:
+            self.setStyleSheet(STYLESHEET)
+            pg.setConfigOptions(background=SURFACE, foreground=TEXT)
+            if hasattr(self, "plot"):
+                self.plot.setBackground(SURFACE)
+                self.plot.getAxis("left").setTextPen(pg.mkPen(MUTED))
+                self.plot.getAxis("bottom").setTextPen(pg.mkPen(MUTED))
+                self.plot.getAxis("left").setPen(pg.mkPen("#2A3850"))
+                self.plot.getAxis("bottom").setPen(pg.mkPen("#2A3850"))
+        self._render_chart()
+
+    def _toggle_theme(self) -> None:
+        """Toggle between dark and light themes."""
+        self._theme = "light" if self._theme == "dark" else "dark"
+        self._apply_theme()
+        self.store.log("theme_changed", self._theme)
+        self.theme_btn.setText(tr("theme_dark") if self._theme == "dark" else tr("theme_light"))
+
+    def _set_language(self, lang: str) -> None:
+        """Switch application language and refresh all translatable UI elements."""
+        self._lang = lang
+        tr._lang = lang
+        self._refresh_translations()
+        self.store.log("language_changed", lang)
+
+    def _refresh_translations(self) -> None:
+        """Refresh all translatable labels in the UI."""
+        if hasattr(self, "brand_label"):
+            self.brand_label.setText(tr("app_name"))
+            self.subbrand_label.setText(tr("app_sub"))
+        if hasattr(self, "account_label"):
+            self.account_label.setText(tr("local_enterprise"))
+        if hasattr(self, "account_status"):
+            self.account_status.setText(tr("local_status"))
+        if hasattr(self, "refresh_btn"):
+            self.refresh_btn.setText(tr("refresh_data"))
+        # Update nav buttons
+        if hasattr(self, "nav_buttons"):
+            nav_keys = [
+                "command_center", "intelligence_desk", "scenario_studio", "workspace",
+                "data_sources", "settings", "macro_simulator", "risk_analytics",
+                "information_flow", "time_series_lab", "network_anomaly", "political_climate",
+                "markets_pricing", "regulatory_emh", "causal_epidemic", "fuzzy_decision",
+                "advanced_markets", "compliance_suite",
+            ]
+            for i, key in enumerate(nav_keys):
+                if i < len(self.nav_buttons):
+                    self.nav_buttons[i].setText(tr(key))
+        # Update context label
+        if hasattr(self, "context_label"):
+            idx = self.pages.currentIndex()
+            contexts_en = [
+                "COMMAND CENTER", "INTELLIGENCE DESK", "SCENARIO STUDIO", "WORKSPACE",
+                "DATA SOURCES", "SETTINGS", "MACRO SIMULATOR", "RISK ANALYTICS",
+                "INFORMATION FLOW", "TIME SERIES LAB", "NETWORK & ANOMALY",
+                "POLITICAL & CLIMATE", "MARKETS & PRICING", "REGULATORY & EMH",
+                "CAUSAL & EPIDEMIC", "FUZZY DECISION LAB", "ADVANCED MARKETS",
+                "COMPLIANCE SUITE",
+            ]
+            nav_keys = [
+                "command_center", "intelligence_desk", "scenario_studio", "workspace",
+                "data_sources", "settings", "macro_simulator", "risk_analytics",
+                "information_flow", "time_series_lab", "network_anomaly", "political_climate",
+                "markets_pricing", "regulatory_emh", "causal_epidemic", "fuzzy_decision",
+                "advanced_markets", "compliance_suite",
+            ]
+            self.context_label.setText(tr(nav_keys[idx]).upper())
+        # RTL for Persian
+        if self._lang == "fa":
+            self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        else:
+            self.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+
+    def _setup_shortcuts(self) -> None:
+        """Register global keyboard shortcuts."""
+        # Ctrl+R: Refresh data
+        QShortcut(QKeySequence("Ctrl+R"), self, self._load_country)
+        # Ctrl+E: Export evidence
+        QShortcut(QKeySequence("Ctrl+E"), self, self._export_evidence_pack)
+        # Ctrl+T: Toggle theme
+        QShortcut(QKeySequence("Ctrl+T"), self, self._toggle_theme)
+        # Ctrl+1..9, 0: Switch pages
+        for i in range(min(10, 18)):
+            key = f"Ctrl+{i+1}" if i < 9 else "Ctrl+0"
+            QShortcut(QKeySequence(key), self, lambda checked, idx=i: self._switch_page(idx))
+        # Ctrl+W: Export chart image
+        QShortcut(QKeySequence("Ctrl+W"), self, self._export_chart_image)
+        # Ctrl+Shift+L: Toggle language
+        QShortcut(QKeySequence("Ctrl+Shift+L"), self, lambda: self._set_language("fa" if self._lang == "en" else "en"))
+
+    def _export_chart_image(self) -> None:
+        """Export the main dashboard chart as PNG."""
+        if not hasattr(self, "plot"):
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export Chart Image", "ecopulse_chart.png",
+            "PNG Files (*.png);;SVG Files (*.svg);;All Files (*)",
+        )
+        if not path:
+            return
+        try:
+            exporter = pg.exporters.ImageExporter(self.plot.plotItem)
+            exporter.parameters()["width"] = 1920
+            if path.endswith(".svg"):
+                pg.exporters.SVGExporter(self.plot.plotItem).export(path)
+            else:
+                exporter.export(path)
+            self.store.log("chart_image_exported", path)
+            QMessageBox.information(self, "Image exported", f"Chart saved to {path}")
+        except Exception:
+            # Fallback: grab widget
+            try:
+                pixmap = self.plot.grab()
+                pixmap.save(path)
+                self.store.log("chart_image_exported", path)
+            except Exception:
+                pass
+
+    def _import_csv_data(self) -> None:
+        """Import CSV data for use in quantitative analysis pages."""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Import CSV Data", "", "CSV Files (*.csv);;All Files (*)",
+        )
+        if not path:
+            return
+        try:
+            import pandas as pd
+            df = pd.read_csv(path)
+            self._imported_data = {}
+            for col in df.columns:
+                series = pd.to_numeric(df[col], errors="coerce").dropna().values
+                if len(series) > 5:
+                    self._imported_data[col] = series
+            if self._imported_data:
+                n_cols = len(self._imported_data)
+                self.store.log("csv_imported", f"{path} ({n_cols} numeric columns)")
+                QMessageBox.information(
+                    self, "Data imported",
+                    f"Imported {n_cols} numeric column(s) from {os.path.basename(path)}.\n\nAvailable in Time Series Lab.",
+                )
+            else:
+                QMessageBox.warning(self, "Import failed", "No numeric columns with >5 values found.")
+        except ImportError:
+            # Fallback: manual CSV parsing without pandas
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    reader = csv.reader(f)
+                    headers = next(reader)
+                    columns = {h: [] for h in headers}
+                    for row in reader:
+                        for h, val in zip(headers, row):
+                            try:
+                                columns[h].append(float(val))
+                            except ValueError:
+                                pass
+                    self._imported_data = {}
+                    for h, vals in columns.items():
+                        if len(vals) > 5:
+                            self._imported_data[h] = np.array(vals)
+                    if self._imported_data:
+                        QMessageBox.information(
+                            self, "Data imported",
+                            f"Imported {len(self._imported_data)} column(s) from {os.path.basename(path)}",
+                        )
+                    else:
+                        QMessageBox.warning(self, "Import failed", "No usable numeric data found.")
+            except Exception as exc:
+                QMessageBox.warning(self, "Import error", str(exc))
 
     def _build_window(self) -> None:
         self.setWindowTitle(f"{APP_NAME} — Economic Intelligence")
@@ -428,6 +678,7 @@ class MainWindow(QMainWindow):
         content_layout.addWidget(self.pages, 1)
         shell.addWidget(content, 1)
         self.setStyleSheet(STYLESHEET)
+        self._setup_shortcuts()
 
     def _build_sidebar(self) -> QFrame:
         bar = QFrame()
@@ -436,9 +687,11 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(bar)
         layout.setContentsMargins(22, 26, 18, 22)
         layout.setSpacing(7)
-        brand = QLabel("ECOPULSE")
+        brand = QLabel(tr("app_name"))
+        self.brand_label = brand
         brand.setObjectName("brand")
-        subbrand = QLabel("ECONOMIC INTELLIGENCE")
+        subbrand = QLabel(tr("app_sub"))
+        self.subbrand_label = subbrand
         subbrand.setObjectName("subbrand")
         layout.addWidget(brand)
         layout.addWidget(subbrand)
@@ -473,14 +726,32 @@ class MainWindow(QMainWindow):
             self.nav_buttons.append(button)
             layout.addWidget(button)
         self.nav_buttons[0].setChecked(True)
+        layout.addSpacing(16)
+        # Theme toggle button
+        self.theme_btn = QPushButton(tr("theme_light"))
+        self.theme_btn.setObjectName("secondaryButton")
+        self.theme_btn.clicked.connect(self._toggle_theme)
+        layout.addWidget(self.theme_btn)
+        # Language toggle button
+        self.lang_btn = QPushButton("فارسی / English")
+        self.lang_btn.setObjectName("secondaryButton")
+        self.lang_btn.clicked.connect(lambda: self._set_language("fa" if self._lang == "en" else "en"))
+        layout.addWidget(self.lang_btn)
+        # CSV Import button
+        self.import_btn = QPushButton(tr("import_csv"))
+        self.import_btn.setObjectName("importCsvButton")
+        self.import_btn.clicked.connect(self._import_csv_data)
+        layout.addWidget(self.import_btn)
         layout.addStretch(1)
         account, account_layout = frame()
         account.setObjectName("accountCard")
         account_layout.setContentsMargins(14, 14, 14, 14)
         account_layout.setSpacing(4)
-        label = QLabel("LOCAL ENTERPRISE WORKSPACE")
+        label = QLabel(tr("local_enterprise"))
+        self.account_label = label
         label.setObjectName("accountLabel")
-        status = QLabel("Private data cache enabled")
+        status = QLabel(tr("local_status"))
+        self.account_status = status
         status.setObjectName("accountStatus")
         account_layout.addWidget(label)
         account_layout.addWidget(status)
@@ -504,10 +775,15 @@ class MainWindow(QMainWindow):
         self.country_combo.currentTextChanged.connect(lambda _: self._load_country())
         self.country_combo.setMinimumWidth(180)
         layout.addWidget(self.country_combo)
-        refresh = QPushButton("Refresh data")
+        refresh = QPushButton(tr("refresh_data"))
+        self.refresh_btn = refresh
         refresh.setObjectName("primaryButton")
         refresh.clicked.connect(self._load_country)
         layout.addWidget(refresh)
+        chart_img_btn = QPushButton(tr("export_image"))
+        chart_img_btn.setObjectName("exportImageButton")
+        chart_img_btn.clicked.connect(self._export_chart_image)
+        layout.addWidget(chart_img_btn)
         return top
 
     def _build_scroll_page(self) -> tuple[QScrollArea, QWidget, QVBoxLayout]:
@@ -793,6 +1069,22 @@ class MainWindow(QMainWindow):
         scroll, _, layout = self._build_scroll_page()
         layout.addWidget(SectionTitle("Configuration", "Settings", "Review the local security boundary before connecting any organization-managed service."))
         panel, panel_layout = frame("Desktop defaults", "These settings are local to this Windows workstation.")
+
+        # Theme section
+        theme_panel, theme_layout = frame("Appearance", "Switch between dark and light themes, or change the application language.")
+        theme_row = QHBoxLayout()
+        self.settings_theme_btn = QPushButton(tr("theme_light") if self._theme == "dark" else tr("theme_dark"))
+        self.settings_theme_btn.setObjectName("primaryButton")
+        self.settings_theme_btn.clicked.connect(self._toggle_theme)
+        theme_row.addWidget(self.settings_theme_btn)
+        self.settings_lang_btn = QPushButton("فارسی" if self._lang == "en" else "English")
+        self.settings_lang_btn.setObjectName("secondaryButton")
+        self.settings_lang_btn.clicked.connect(lambda: self._set_language("fa" if self._lang == "en" else "en"))
+        theme_row.addWidget(self.settings_lang_btn)
+        theme_layout.addLayout(theme_row)
+        theme_layout.addWidget(QLabel("Keyboard shortcuts: Ctrl+R (refresh), Ctrl+T (theme), Ctrl+E (evidence), Ctrl+W (chart image), Ctrl+1-9 (pages), Ctrl+Shift+L (language)"))
+        layout.addWidget(theme_panel)
+
         panel_layout.addWidget(QLabel("Active country is changed from the global selector. User-managed credentials are intentionally not persisted in this starter edition. Production use should integrate the organization’s approved secret manager and identity provider."))
         clear = QPushButton("Open local workspace folder")
         clear.setObjectName("secondaryButton")
@@ -1198,6 +1490,65 @@ def run() -> int:
     return app.exec()
 
 
+
+LIGHT_STYLESHEET = f"""
+* {{ font-family: "Segoe UI", "Inter", Arial, sans-serif; color: {LIGHT_TEXT}; font-size: 13px; }}
+QMainWindow, QWidget#root, QWidget#page, QScrollArea > QWidget > QWidget {{ background: {LIGHT_CANVAS}; }}
+QFrame#sidebar {{ background: {LIGHT_SIDEBAR}; border-right: 1px solid {LIGHT_BORDER}; }}
+QLabel#brand {{ color: {LIGHT_ACCENT}; font-size: 23px; font-weight: 800; letter-spacing: 2px; }}
+QLabel#subbrand {{ color: {LIGHT_MUTED}; font-size: 9px; font-weight: 700; letter-spacing: 1.8px; }}
+QPushButton#navButton {{ background: transparent; color: #4A5568; border: 0; border-radius: 8px; text-align: left; font-size: 13px; font-weight: 600; padding: 12px 12px; }}
+QPushButton#navButton:hover {{ background: #EDF2F7; color: {LIGHT_TEXT}; }}
+QPushButton#navButton:checked {{ background: #E2E8F0; color: {LIGHT_ACCENT}; border-left: 3px solid {LIGHT_ACCENT}; padding-left: 9px; }}
+QFrame#accountCard {{ background: #F7FAFC; border: 1px solid {LIGHT_BORDER}; border-radius: 10px; }}
+QLabel#accountLabel, QLabel#metricTitle, QLabel#eyebrow {{ color: {LIGHT_MUTED}; font-size: 9px; font-weight: 800; letter-spacing: 1.1px; }}
+QLabel#accountStatus {{ color: {LIGHT_ACCENT}; font-size: 11px; font-weight: 600; }}
+QLabel#contextLabel {{ color: {LIGHT_MUTED}; font-size: 10px; font-weight: 800; letter-spacing: 1.2px; }}
+QLabel#statusReady {{ background: #C6F6D5; color: #22543D; border-radius: 10px; font-size: 10px; font-weight: 800; padding: 6px 7px; }}
+QLabel#statusPending {{ background: #FEFCBF; color: #744210; border-radius: 10px; font-size: 10px; font-weight: 800; padding: 6px 7px; }}
+QComboBox, QLineEdit {{ background: {LIGHT_SURFACE}; border: 1px solid {LIGHT_BORDER}; border-radius: 7px; padding: 8px 11px; min-height: 16px; color: {LIGHT_TEXT}; }}
+QComboBox:hover, QLineEdit:focus {{ border-color: {LIGHT_ACCENT}; }}
+QComboBox::drop-down {{ border: 0; width: 24px; }}
+QComboBox QAbstractItemView {{ background: {LIGHT_SURFACE}; border: 1px solid {LIGHT_BORDER}; selection-background-color: #BEE3F8; color: {LIGHT_TEXT}; }}
+QPushButton#primaryButton {{ background: {LIGHT_ACCENT}; color: white; border: 0; border-radius: 7px; padding: 10px 15px; font-weight: 800; }}
+QPushButton#primaryButton:hover {{ background: {LIGHT_ACCENT_DARK}; }}
+QPushButton#secondaryButton {{ background: #EDF2F7; color: #4A5568; border: 1px solid {LIGHT_BORDER}; border-radius: 7px; padding: 9px 13px; font-weight: 700; }}
+QPushButton#secondaryButton:hover {{ border-color: {LIGHT_ACCENT}; color: {LIGHT_ACCENT}; }}
+QPushButton#exportImageButton {{ background: #EBF8FF; color: #2B6CB0; border: 1px solid #BEE3F8; border-radius: 7px; padding: 9px 13px; font-weight: 700; }}
+QPushButton#exportImageButton:hover {{ border-color: #3182CE; color: #2B6CB0; }}
+QPushButton#importCsvButton {{ background: #FEFCBF; color: #744210; border: 1px solid #F6E05E; border-radius: 7px; padding: 9px 13px; font-weight: 700; }}
+QPushButton#importCsvButton:hover {{ border-color: #D69E2E; }}
+QLabel#sectionHeading {{ color: {LIGHT_TEXT}; font-size: 26px; font-weight: 750; }}
+QLabel#sectionDescription {{ color: {LIGHT_MUTED}; font-size: 13px; }}
+QLabel#stamp {{ color: {LIGHT_MUTED}; font-size: 9px; font-weight: 800; letter-spacing: 1px; }}
+QFrame#metricCard {{ background: {LIGHT_SURFACE}; border: 1px solid {LIGHT_BORDER}; border-radius: 12px; }}
+QFrame#metricCard:hover {{ border-color: #CBD5E0; }}
+QLabel#metricValue {{ font-size: 26px; font-weight: 750; }}
+QLabel#metricDelta {{ color: {LIGHT_MUTED}; font-size: 11px; }}
+QFrame#panel {{ background: {LIGHT_SURFACE}; border: 1px solid {LIGHT_BORDER}; border-radius: 12px; }}
+QLabel#panelTitle {{ color: {LIGHT_TEXT}; font-size: 15px; font-weight: 750; }}
+QLabel#panelSubtitle, QLabel#provenance {{ color: {LIGHT_MUTED}; font-size: 11px; line-height: 1.45; }}
+QLabel#alertCount {{ color: {LIGHT_ACCENT}; font-size: 22px; font-weight: 750; padding: 6px 0; }}
+QLabel#regimeLabel, QLabel#scenarioStatus {{ font-size: 22px; font-weight: 800; letter-spacing: 1px; }}
+QLabel#scenarioSummary {{ color: #4A5568; font-size: 13px; line-height: 1.45; }}
+QFrame#scenarioControl {{ background: #F7FAFC; border: 1px solid {LIGHT_BORDER}; border-radius: 9px; }}
+QLabel#scenarioLabel {{ color: #4A5568; font-weight: 700; }}
+QLabel#scenarioValue {{ color: {LIGHT_ACCENT}; font-weight: 800; }}
+QSlider::groove:horizontal {{ border: 0; height: 5px; background: #CBD5E0; border-radius: 2px; }}
+QSlider::sub-page:horizontal {{ background: {LIGHT_ACCENT}; border-radius: 2px; }}
+QSlider::handle:horizontal {{ background: {LIGHT_ACCENT_DARK}; width: 16px; margin: -6px 0; border-radius: 8px; }}
+QTableWidget {{ background: transparent; border: 0; color: #2D3748; gridline-color: transparent; }}
+QHeaderView::section {{ background: #EDF2F7; color: #4A5568; border: 0; border-bottom: 1px solid {LIGHT_BORDER}; padding: 9px 8px; font-size: 10px; font-weight: 800; }}
+QTableWidget::item {{ border-bottom: 1px solid #E2E8F0; padding: 9px 8px; }}
+QTableWidget::item:selected {{ background: #BEE3F8; }}
+QLabel#workflowItem {{ background: #F7FAFC; border-left: 3px solid {LIGHT_ACCENT}; border-radius: 4px; padding: 11px; color: #4A5568; }}
+QLabel#notice {{ background: #FFFFF0; color: #744210; border: 1px solid #F6E05E; border-radius: 7px; padding: 10px; }}
+QScrollArea {{ background: transparent; border: 0; }}
+QScrollBar:vertical {{ background: transparent; width: 9px; margin: 0; }}
+QScrollBar::handle:vertical {{ background: #CBD5E0; border-radius: 4px; min-height: 30px; }}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+"""
+
 STYLESHEET = f"""
 * {{
     font-family: "Segoe UI", "Inter", Arial, sans-serif;
@@ -1228,6 +1579,10 @@ QPushButton#primaryButton {{ background: {ACCENT_DARK}; color: #051821; border: 
 QPushButton#primaryButton:hover {{ background: {ACCENT}; }}
 QPushButton#secondaryButton {{ background: #1A2C47; color: #C8D5E7; border: 1px solid #2A4264; border-radius: 7px; padding: 9px 13px; font-weight: 700; }}
 QPushButton#secondaryButton:hover {{ border-color: {ACCENT}; color: {ACCENT}; }}
+QPushButton#exportImageButton {{ background: #0D2B3E; color: {BLUE}; border: 1px solid #1A3D5C; border-radius: 7px; padding: 9px 13px; font-weight: 700; }}
+QPushButton#exportImageButton:hover {{ border-color: {BLUE}; color: {BLUE}; }}
+QPushButton#importCsvButton {{ background: #2B281C; color: #F5CD69; border: 1px solid #5C502A; border-radius: 7px; padding: 9px 13px; font-weight: 700; }}
+QPushButton#importCsvButton:hover {{ border-color: #F5CD69; }}
 QLabel#sectionHeading {{ color: {TEXT}; font-size: 26px; font-weight: 750; }}
 QLabel#sectionDescription {{ color: #8D9DB4; font-size: 13px; }}
 QLabel#stamp {{ color: #7890AD; font-size: 9px; font-weight: 800; letter-spacing: 1px; }}
