@@ -18,6 +18,7 @@ EcoPulse Desktop transforms the original Dash prototype into a native **Windows-
 | **Evidence and auditability** | CSV export carries provenance; a JSON Decision Evidence Pack includes data health, lineage, scenario state, alerts, audit events and a SHA-256 integrity checksum. | Creates a lightweight, exportable decision record without an external backend. |
 | **Local Guardrails Manifest** | Settings can export the enabled local control boundary and the required enterprise next steps. | Improves staging readiness and makes desktop limitations explicit. |
 | **Windows release pipeline** | A GitHub Actions workflow validates the app on Windows and builds `EcoPulse.exe` on a Windows runner. A version tag creates a release. | Makes builds reproducible and avoids unreliable cross-platform binary generation. |
+| **Quantitative engine** | 12 analysis pages expose 40+ models from a pure-Python quant library (GARCH, Monte Carlo, causal inference, fuzzy systems, mechanism design and more). | Gives analysts a research-grade toolkit without leaving the workstation. |
 
 ## Why these product choices
 
@@ -46,6 +47,25 @@ The current application starts from a public macro-data connector. The World Ban
 ```
 
 The application separates user-facing analytics from source acquisition and local storage. There is no hard-coded data-provider key, no remote synchronization in this edition and no hidden claim that synthetic fallback data is a live market observation. The source status badge and provenance panel are explicit by design.
+
+## Quantitative engine
+
+The `quant_engine/` package (23 modules, ~14 000 lines of pure Python) provides research-grade models that are exposed through 12 dedicated UI pages. Each page contains multiple interactive panels with pyqtgraph charts, data tables and parameter controls.
+
+| Page | Key models | Source module |
+| --- | --- | --- |
+| Macro Simulator | DSGE, Taylor Rule, Phillips Curve, Minsky Cycle, Kondratiev Wave | `macro_models` |
+| Risk Analytics | GARCH(1,1) VaR/CVaR, Monte Carlo stress, Black-Litterman | `garch_model`, `monte_carlo_risk`, `black_litterman` |
+| Information Flow | Transfer entropy network, Prospect Theory value function | `transfer_entropy`, `behavioral_finance` |
+| Time Series Lab | PCA factors, ARIMA, VAR, Granger causality, CUSUM change detection | `pca_factors`, `time_series_advanced` |
+| Network & Anomaly | Financial contagion, DebtRank, Beneish M-Score, Altman Z-Score | `contagion_network`, `anomaly_detection` |
+| Political & Climate | ICRG scoring, sanctions impact, Climate VaR, Hotelling rule | `political_risk`, `climate_risk` |
+| Markets & Pricing | Black-Scholes Greeks, Vasicek/CIR rates, Akerlof lemons, market making | `interest_rate_models`, `market_microstructure` |
+| Regulatory & EMH | Basel III ratios, EMH tests, fuzzy credit scoring, MiFID II, Dodd-Frank | `regulatory_framework`, `market_efficiency`, `fuzzy_credit` |
+| Causal & Epidemic | Causal DAG, DID, IV/2SLS, Double ML, PSM, SIR epidemic | `causal_inference`, `epidemiological_economics` |
+| Fuzzy Decision Lab | Fuzzy AHP, TOPSIS, ANFIS, Fuzzy BS, fuzzy portfolio | `fuzzy_advanced` |
+| Advanced Markets | Spence signalling, RS screening, auctions, Hull-White, mechanism design | `market_microstructure`, `capital_structure` |
+| Compliance Suite | MiFID II best execution, Dodd-Frank compliance, event study | `regulatory_framework`, `market_efficiency` |
 
 ## Run locally
 
