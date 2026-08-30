@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.5.0 — Comprehensive Upgrade: Theme, i18n, Image Export, Import, Shortcuts
+
+### Added
+
+- **Dark/Light Theme Toggle**: Full light theme stylesheet with persistent toggle. Button in sidebar + Settings page. Ctrl+T shortcut. Main dashboard chart updates colors dynamically.
+- **Persian (Farsi) i18n**: Complete Persian translation for all 18 sidebar items, buttons, and status labels. RTL layout support. Toggle between English and Persian with Ctrl+Shift+L or sidebar button.
+- **PNG/SVG Chart Export**: 34 "Export Image" buttons across all quantitative pages. Uses pyqtgraph's ImageExporter (PNG at 1920px) and SVGExporter. Fallback to widget grab for complex layouts.
+- **CSV Data Import**: Import user CSV files with numeric columns for analysis. Accessible from sidebar button. Supports pandas (if installed) or manual CSV parsing fallback. Data available for Time Series Lab.
+- **Keyboard Shortcuts**: Ctrl+R (refresh data), Ctrl+T (toggle theme), Ctrl+E (export evidence), Ctrl+W (export chart image), Ctrl+1-9/0 (switch pages), Ctrl+Shift+L (toggle language).
+- **Dashboard chart export button** in the top toolbar.
+- **`_export_image_btn()` helper**: Generic reusable function for adding PNG/SVG export to any PlotWidget.
+- **Settings page**: Theme and language controls with shortcut reference.
+
+### Changed
+
+- `app.py` grew from 1265 to ~1620 lines (+28%): theme system, i18n, shortcuts, import.
+- `quant_pages.py` grew from 2575 to ~2640 lines: 34 image export buttons.
+- All 82 existing tests still pass.
+- `APP_VERSION` bumped to 2.5.0.
+
 ## 2.4.0 — Unit Tests & CSV Export
 
 ### Added

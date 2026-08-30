@@ -43,6 +43,7 @@ import os
 
 from app import (
     ACCENT,
+    tr,
     ACCENT_DARK,
     AMBER,
     BLUE,
@@ -123,6 +124,42 @@ from quant_engine import (
 
 # ------------------------------------------------------------------ helpers
 
+
+
+
+def _export_image_btn(
+    layout: QVBoxLayout,
+    plot_widget: pg.PlotWidget,
+    parent_widget: QWidget,
+    filename: str = "ecopulse_chart",
+) -> QPushButton:
+    """Create an Export Image button that saves a PlotWidget as PNG or SVG."""
+    def _do_export() -> None:
+        try:
+            path, _ = QFileDialog.getSaveFileName(
+                parent_widget, "Export Chart Image", f"{filename}.png",
+                "PNG Files (*.png);;SVG Files (*.svg)",
+            )
+            if not path:
+                return
+            if path.endswith(".svg"):
+                pg.exporters.SVGExporter(plot_widget.plotItem).export(path)
+            else:
+                exporter = pg.exporters.ImageExporter(plot_widget.plotItem)
+                exporter.parameters()["width"] = 1920
+                exporter.export(path)
+        except Exception:
+            try:
+                pixmap = plot_widget.grab()
+                pixmap.save(path)
+            except Exception:
+                pass
+
+    btn = QPushButton(tr("export_image"))
+    btn.setObjectName("exportImageButton")
+    btn.clicked.connect(_do_export)
+    layout.addWidget(btn)
+    return btn
 
 def _styled_plot(min_height: int = 260) -> pg.PlotWidget:
     """Return a PlotWidget pre-configured with the EcoPulse dark theme."""
@@ -327,6 +364,7 @@ def build_macro_simulator_page(parent: QWidget) -> QWidget:
     dsge_lay.addLayout(btn_row)
     dsge_plot = _styled_plot(300)
     dsge_lay.addWidget(dsge_plot, 1)
+    _export_image_btn(dsge_lay, dsge_plot, dsge_panel, "dsge_simulation")
     dsge_lay.addStretch()
     root.addWidget(dsge_panel)
 
@@ -364,6 +402,7 @@ def build_macro_simulator_page(parent: QWidget) -> QWidget:
     minsky_panel, minsky_lay = frame("Minsky Cycle Indicator", "Financial Instability Hypothesis: Hedge → Speculative → Ponzi → Crisis cycle with credit and leverage dynamics.")
     minsky_plot = _styled_plot(300)
     minsky_lay.addWidget(minsky_plot, 1)
+    _export_image_btn(minsky_lay, minsky_plot, minsky_panel, "minsky_cycle")
     # Phase legend
     phase_row = QHBoxLayout()
     phase_colors = {"HEDGE": ACCENT, "SPECULATIVE": AMBER, "PONZI": DANGER, "CRISIS": "#8B0000"}
@@ -413,6 +452,7 @@ def build_macro_simulator_page(parent: QWidget) -> QWidget:
     kw_panel, kw_lay = frame("Kondratiev Wave", "Long-wave ~54-year economic cycles driven by innovation waves and creative destruction, spanning 120 years.")
     kw_plot = _styled_plot(300)
     kw_lay.addWidget(kw_plot, 1)
+    _export_image_btn(kw_lay, kw_plot, kw_panel, "kondratiev_wave")
     kw_lay.addStretch()
     root.addWidget(kw_panel)
 
@@ -470,6 +510,7 @@ def build_risk_analytics_page(parent: QWidget) -> QWidget:
     s_garch_conf, _ = _slider_row("VaR confidence (% x10)", 90, 99, 95, garch_lay, divisor=10)
     garch_plot = _styled_plot(280)
     garch_lay.addWidget(garch_plot, 1)
+    _export_image_btn(garch_lay, garch_plot, garch_panel, "garch_volatility")
     garch_info = QLabel("Computing…")
     garch_info.setObjectName("panelSubtitle")
     garch_info.setWordWrap(True)
@@ -525,6 +566,7 @@ def build_risk_analytics_page(parent: QWidget) -> QWidget:
     mc_lay.addWidget(btn_mc)
     mc_plot = _styled_plot(300)
     mc_lay.addWidget(mc_plot, 1)
+    _export_image_btn(mc_lay, mc_plot, mc_panel, "monte_carlo")
     mc_info = QLabel("Press Run Simulation")
     mc_info.setObjectName("panelSubtitle")
     mc_info.setWordWrap(True)
@@ -703,6 +745,7 @@ def build_information_flow_page(parent: QWidget) -> QWidget:
     bar_panel, bar_lay = frame("Information Flow Chart", "Bar chart of transfer entropy values. Recomputes when you click Compute.")
     bar_plot = _styled_plot(280)
     bar_lay.addWidget(bar_plot, 1)
+    _export_image_btn(bar_lay, bar_plot, bar_panel, "black_litterman")
     bar_lay.addStretch()
     root.addWidget(bar_panel)
 
@@ -827,6 +870,7 @@ def build_information_flow_page(parent: QWidget) -> QWidget:
     pt_panel, pt_lay = frame("Prospect Theory Value Function", "Kahneman–Tversky S-shaped value function. Adjust α, β and λ to see how risk attitudes shape the value function.")
     pt_plot = _styled_plot(300)
     pt_lay.addWidget(pt_plot, 1)
+    _export_image_btn(pt_lay, pt_plot, pt_panel, "prospect_theory")
 
     # Parameter display
     s_pt_alpha, _ = _slider_row("α (loss curvature, x100)", 50, 150, 88, pt_lay, divisor=100)
@@ -893,6 +937,7 @@ def build_time_series_lab_page(parent: QWidget) -> QWidget:
     pca_lay.addWidget(btn_pca)
     pca_plot = _styled_plot(280)
     pca_lay.addWidget(pca_plot, 1)
+    _export_image_btn(pca_lay, pca_plot, pca_panel, "pca_factors")
     pca_info = QLabel("Press Run PCA")
     pca_info.setObjectName("panelSubtitle")
     pca_info.setWordWrap(True)
@@ -941,6 +986,7 @@ def build_time_series_lab_page(parent: QWidget) -> QWidget:
     arima_lay.addWidget(btn_arima)
     arima_plot = _styled_plot(280)
     arima_lay.addWidget(arima_plot, 1)
+    _export_image_btn(arima_lay, arima_plot, arima_panel, "arima_forecast")
     arima_info = QLabel("Press Run ARIMA")
     arima_info.setObjectName("panelSubtitle")
     arima_info.setWordWrap(True)
@@ -1013,6 +1059,7 @@ def build_time_series_lab_page(parent: QWidget) -> QWidget:
     cusum_panel, cusum_lay = frame("CUSUM Structural Break Detection", "Detect structural breaks in the GDP growth series using the CUSUM statistic.")
     cusum_plot = _styled_plot(250)
     cusum_lay.addWidget(cusum_plot, 1)
+    _export_image_btn(cusum_lay, cusum_plot, cusum_panel, "cusum")
     cusum_info = QLabel("Waiting…")
     cusum_info.setObjectName("panelSubtitle")
     cusum_info.setWordWrap(True)
@@ -1062,6 +1109,7 @@ def build_network_anomaly_page(parent: QWidget) -> QWidget:
     contagion_panel, contagion_lay = frame("Financial Contagion Simulation", "Erdos-Renyi interbank network with cascading default simulation. Shock one bank and observe systemic propagation via DebtRank.")
     contagion_plot = _styled_plot(300)
     contagion_lay.addWidget(contagion_plot, 1)
+    _export_image_btn(contagion_lay, contagion_plot, contagion_panel, "contagion_network")
     contagion_info = QLabel("Computing…")
     contagion_info.setObjectName("panelSubtitle")
     contagion_info.setWordWrap(True)
@@ -1119,6 +1167,7 @@ def build_network_anomaly_page(parent: QWidget) -> QWidget:
     anomaly_panel, anomaly_lay = frame("Price Manipulation Detection", "Multi-signal anomaly detector: volume spikes, price velocity, painting-the-tape and spoofing signals.")
     anomaly_plot = _styled_plot(280)
     anomaly_lay.addWidget(anomaly_plot, 1)
+    _export_image_btn(anomaly_lay, anomaly_plot, anomaly_panel, "anomaly_detection")
     anomaly_info = QLabel("Computing…")
     anomaly_info.setObjectName("panelSubtitle")
     anomaly_info.setWordWrap(True)
@@ -1264,6 +1313,7 @@ def build_political_climate_page(parent: QWidget) -> QWidget:
     sanc_lay.addWidget(btn_sanc)
     sanc_plot = _styled_plot(260)
     sanc_lay.addWidget(sanc_plot, 1)
+    _export_image_btn(sanc_lay, sanc_plot, sanc_panel, "sanctions")
     sanc_info = QLabel("Press Run Sanction Model")
     sanc_info.setObjectName("panelSubtitle")
     sanc_info.setWordWrap(True)
@@ -1300,6 +1350,7 @@ def build_political_climate_page(parent: QWidget) -> QWidget:
     climate_panel, climate_lay = frame("Climate Value-at-Risk", "Physical climate risk VaR under temperature scenarios.")
     climate_plot = _styled_plot(260)
     climate_lay.addWidget(climate_plot, 1)
+    _export_image_btn(climate_lay, climate_plot, climate_panel, "climate_var")
     climate_info = QLabel("Computing…")
     climate_info.setObjectName("panelSubtitle")
     climate_info.setWordWrap(True)
@@ -1340,6 +1391,7 @@ def build_political_climate_page(parent: QWidget) -> QWidget:
     hot_lay.addWidget(btn_hot)
     hot_plot = _styled_plot(260)
     hot_lay.addWidget(hot_plot, 1)
+    _export_image_btn(hot_lay, hot_plot, hot_panel, "hotelling_rule")
     hot_lay.addStretch()
     root.addWidget(hotelling_panel)
 
@@ -1373,6 +1425,7 @@ def build_political_climate_page(parent: QWidget) -> QWidget:
     bass_lay.addWidget(btn_bass)
     bass_plot = _styled_plot(260)
     bass_lay.addWidget(bass_plot, 1)
+    _export_image_btn(bass_lay, bass_plot, bass_panel, "bass_diffusion")
     bass_info = QLabel("")
     bass_info.setObjectName("panelSubtitle")
     bass_info.setWordWrap(True)
@@ -1474,6 +1527,7 @@ def build_markets_pricing_page(parent: QWidget) -> QWidget:
     smile_panel, smile_lay = frame("Volatility Smile", "Implied volatility surface across strikes.")
     smile_plot = _styled_plot(260)
     smile_lay.addWidget(smile_plot, 1)
+    _export_image_btn(smile_lay, smile_plot, smile_panel, "volatility_smile")
     smile_lay.addStretch()
     root.addWidget(smile_panel)
 
@@ -1493,6 +1547,7 @@ def build_markets_pricing_page(parent: QWidget) -> QWidget:
     yc_panel, yc_lay = frame("Vasicek & CIR Yield Curves", "Mean-reverting short-rate models with analytical zero-coupon yield curves.")
     yc_plot = _styled_plot(280)
     yc_lay.addWidget(yc_plot, 1)
+    _export_image_btn(yc_lay, yc_plot, yc_panel, "yield_curve")
     yc_lay.addStretch()
     root.addWidget(yc_panel)
 
@@ -1514,6 +1569,7 @@ def build_markets_pricing_page(parent: QWidget) -> QWidget:
     mm_panel, mm_lay = frame("Avellaneda-Stoikov Market Maker", "Inventory-based market making: reservation price adjusts with inventory risk.")
     mm_plot = _styled_plot(280)
     mm_lay.addWidget(mm_plot, 1)
+    _export_image_btn(mm_lay, mm_plot, mm_panel, "modigliani_miller")
     mm_info = QLabel("")
     mm_info.setObjectName("panelSubtitle")
     mm_info.setWordWrap(True)
@@ -1541,6 +1597,7 @@ def build_markets_pricing_page(parent: QWidget) -> QWidget:
     akerlof_panel, akerlof_lay = frame("Akerlof Lemons Market", "Adverse selection in asymmetric information markets.")
     akerlof_plot = _styled_plot(260)
     akerlof_lay.addWidget(akerlof_plot, 1)
+    _export_image_btn(akerlof_lay, akerlof_plot, akerlof_panel, "akerlof_lemons")
     akerlof_info = QLabel("")
     akerlof_info.setObjectName("panelSubtitle")
     akerlof_info.setWordWrap(True)
@@ -1568,6 +1625,7 @@ def build_markets_pricing_page(parent: QWidget) -> QWidget:
     mm2_panel, mm2_lay = frame("Modigliani-Miller Capital Structure", "MM Proposition I with taxes: V_L = V_U + T_c * D.")
     mm2_plot = _styled_plot(260)
     mm2_lay.addWidget(mm2_plot, 1)
+    _export_image_btn(mm2_lay, mm2_plot, mm2_panel, "trade_off_theory")
     mm2_lay.addStretch()
     root.addWidget(mm2_panel)
 
@@ -1837,6 +1895,7 @@ def build_causal_epidemiological_page(parent: QWidget) -> QWidget:
     did_lay.addWidget(did_info)
     did_plot = _styled_plot(250)
     did_lay.addWidget(did_plot, 1)
+    _export_image_btn(did_lay, did_plot, did_panel, "diff_in_diff")
     did_lay.addStretch()
     root.addWidget(did_panel)
 
@@ -1883,6 +1942,7 @@ def build_causal_epidemiological_page(parent: QWidget) -> QWidget:
     sir_lay.addLayout(btn_row_sir)
     sir_plot = _styled_plot(300)
     sir_lay.addWidget(sir_plot, 1)
+    _export_image_btn(sir_lay, sir_plot, sir_panel, "sir_model")
     sir_info = QLabel("")
     sir_info.setObjectName("panelSubtitle")
     sir_info.setWordWrap(True)
@@ -1954,6 +2014,7 @@ def build_causal_epidemiological_page(parent: QWidget) -> QWidget:
     dml_lay.addWidget(dml_info)
     dml_plot = _styled_plot(220)
     dml_lay.addWidget(dml_plot, 1)
+    _export_image_btn(dml_lay, dml_plot, dml_panel, "double_ml")
     dml_lay.addStretch()
     root.addWidget(dml_panel)
 
@@ -1990,6 +2051,7 @@ def build_causal_epidemiological_page(parent: QWidget) -> QWidget:
     psm_lay.addWidget(psm_info)
     psm_plot = _styled_plot(220)
     psm_lay.addWidget(psm_plot, 1)
+    _export_image_btn(psm_lay, psm_plot, psm_panel, "psm")
     psm_lay.addStretch()
     root.addWidget(psm_panel)
 
@@ -2114,6 +2176,7 @@ def build_fuzzy_decision_page(parent: QWidget) -> QWidget:
     fp_panel, fp_lay = frame("Fuzzy Portfolio Optimisation", "Mean-variance optimisation with triangular fuzzy number expected returns. Sweep alpha-cuts to find weight ranges.")
     fp_plot = _styled_plot(260)
     fp_lay.addWidget(fp_plot, 1)
+    _export_image_btn(fp_lay, fp_plot, fp_panel, "fuzzy_portfolio")
     fp_info = QLabel("")
     fp_info.setObjectName("panelSubtitle")
     fp_info.setWordWrap(True)
@@ -2155,6 +2218,7 @@ def build_fuzzy_decision_page(parent: QWidget) -> QWidget:
     anfis_panel, anfis_lay = frame("Simplified ANFIS", "Adaptive Neuro-Fuzzy Inference System: trains fuzzy rules from data via least-squares consequent optimisation.")
     anfis_plot = _styled_plot(250)
     anfis_lay.addWidget(anfis_plot, 1)
+    _export_image_btn(anfis_lay, anfis_plot, anfis_panel, "anfis")
     anfis_info = QLabel("")
     anfis_info.setObjectName("panelSubtitle")
     anfis_info.setWordWrap(True)
@@ -2187,6 +2251,7 @@ def build_fuzzy_decision_page(parent: QWidget) -> QWidget:
     fbs_panel, fbs_lay = frame("Fuzzy Black-Scholes Option Pricing", "Option pricing with fuzzy volatility sigma = (sigma_l, sigma_m, sigma_u). Produces a triangular fuzzy number for the call price.")
     fbs_plot = _styled_plot(260)
     fbs_lay.addWidget(fbs_plot, 1)
+    _export_image_btn(fbs_lay, fbs_plot, fbs_panel, "fuzzy_bs")
     fbs_info = QLabel("")
     fbs_info.setObjectName("panelSubtitle")
     fbs_info.setWordWrap(True)
@@ -2237,6 +2302,7 @@ def build_advanced_markets_page(parent: QWidget) -> QWidget:
     spence_panel, spence_lay = frame("Spence Job-Market Signalling", "High-type workers signal ability through costly education. Separating vs pooling equilibrium analysis.")
     spence_plot = _styled_plot(260)
     spence_lay.addWidget(spence_plot, 1)
+    _export_image_btn(spence_lay, spence_plot, spence_panel, "spence_signalling")
     spence_info = QLabel("")
     spence_info.setObjectName("panelSubtitle")
     spence_info.setWordWrap(True)
@@ -2318,6 +2384,7 @@ def build_advanced_markets_page(parent: QWidget) -> QWidget:
     hw_panel, hw_lay = frame("Hull-White Yield Curve Calibration", "Extended Vasicek model calibrated to market yield curve. Compare model-implied vs market yields.")
     hw_plot = _styled_plot(260)
     hw_lay.addWidget(hw_plot, 1)
+    _export_image_btn(hw_lay, hw_plot, hw_panel, "hull_white")
     hw_lay.addStretch()
     root.addWidget(hw_panel)
 
@@ -2345,6 +2412,7 @@ def build_advanced_markets_page(parent: QWidget) -> QWidget:
     to_lay.addWidget(btn_to)
     to_plot = _styled_plot(260)
     to_lay.addWidget(to_plot, 1)
+    _export_image_btn(to_lay, to_plot, to_panel, "trade_off_theory")
     to_info = QLabel("")
     to_info.setObjectName("panelSubtitle")
     to_info.setWordWrap(True)
@@ -2379,6 +2447,7 @@ def build_advanced_markets_page(parent: QWidget) -> QWidget:
     po_panel, po_lay = frame("Pecking Order Theory Simulation", "Firms prefer internal financing, then debt, then equity. Simulates 20-year capital structure evolution.")
     po_plot = _styled_plot(260)
     po_lay.addWidget(po_plot, 1)
+    _export_image_btn(po_lay, po_plot, po_panel, "pecking_order")
     po_lay.addStretch()
     root.addWidget(po_panel)
 
@@ -2531,6 +2600,7 @@ def build_compliance_suite_page(parent: QWidget) -> QWidget:
     es_lay.addWidget(btn_es)
     es_plot = _styled_plot(280)
     es_lay.addWidget(es_plot, 1)
+    _export_image_btn(es_lay, es_plot, es_panel, "event_study")
     es_info = QLabel("")
     es_info.setObjectName("panelSubtitle")
     es_info.setWordWrap(True)
