@@ -1,5 +1,23 @@
 # Changelog
 
+## 2.3.0 — Interactive Controls Upgrade (All 12 Quant Pages)
+
+### Added
+
+- **31 new sliders and 11 new action buttons** across 7 previously static pages, turning display-only panels into interactive analysis tools.
+- **Risk Analytics**: GARCH VaR confidence slider, Monte Carlo paths/confidence/steps sliders with Run Simulation button.
+- **Information Flow**: Transfer Entropy lag and bins sliders with Compute button, Prospect Theory α/β/λ sliders for real-time value function reshaping.
+- **Time Series Lab**: ARIMA (p,d,q) order sliders and forecast horizon slider with Run ARIMA button, PCA variance threshold slider with Run PCA button.
+- **Political & Climate**: Sanction severity/duration/trade-dependency sliders, Hotelling initial-price/cost/discount-rate sliders, Bass innovation/imitation coefficient sliders — all with Run buttons.
+- **Fuzzy Decision Lab**: Run buttons for Fuzzy AHP and Fuzzy TOPSIS to recompute with fresh random pairwise comparisons.
+- **Advanced Markets**: Mechanism Design n_bidders and value_std sliders, Trade-Off Theory bankruptcy-beta and tax-rate sliders with Run buttons.
+- **Compliance Suite**: Event Study event-day and abnormal-return-effect sliders, Dodd-Frank trading-revenue and total-revenue sliders with Run buttons.
+
+### Changed
+
+- **Interactive element counts**: Sliders 15→46 (+207%), PushButtons ~10→21 (+110%), Signal connections 10→27 (+170%).
+- **All 12 quantitative pages now have interactive controls** (previously 5 of 12 were interactive).
+
 ## 2.2.0 — Quality, Documentation & CI Improvements
 
 ### Fixed
